@@ -1,0 +1,12 @@
+boto3
+mail-parser
+pydantic
+python-dotenv
+supabase
+pypinyin
+requests
+fastapi
+uvicorn
+playwright
+beautifulsoup4
+cryptography
