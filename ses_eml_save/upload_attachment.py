@@ -56,7 +56,7 @@ def upload_attachments_to_storage(attachments, user_id, bucket=SUPABASE_BUCKET):
         
         except Exception as e:
             logger.exception(f"Failed to upload attachment {i}/{len(attachments)}: {att.get('filename', 'unknown')} - Error: {str(e)}")
-            raise
+            records[filename] = ""
     
     logger.info(f"Attachment upload process completed. Successfully uploaded {len(records)}/{len(attachments)} attachments")
     return records

@@ -116,7 +116,7 @@ async def upload_to_supabase(bucket, key, user_id):
             logger.exception(f"Failed to save upload result to database: {str(e)}")
         
         logger.info(f"upload_to_supabase completed successfully. Final status: {status}")
-        return status
+        return status, success_count
         
     except Exception as e:
         logger.exception(f"Critical error in upload_to_supabase for user_id {user_id}: {str(e)}")
@@ -170,7 +170,7 @@ async def update_receipt(request: UpdateReceiptRequest):
   
 
 async def get_receipt(request: GetReceiptRequest):
-    """根据user_id和可选的id查询收据信息"""
+    """根据user_id和可选的id查询收据信息(待加一个时间范围的选择条件)"""
     logger.info(f"Querying receipts for user_id: {request.user_id}, ind: {request.ind}, limit: {request.limit}, offset: {request.offset}")
     
     try:

@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from fastapi import FastAPI, Request
 from ses_eml_save.routers import router as ses_eml_save_routers
+from rcpdro_web_save.routers import router as rcpdro_web_save_routers
 
 # 创建logs目录
 os.makedirs('logs', exist_ok=True)
@@ -23,6 +24,7 @@ app = FastAPI()
 
 # 包含路由
 app.include_router(ses_eml_save_routers)
+app.include_router(rcpdro_web_save_routers)
 
 
 @app.get("/health")
