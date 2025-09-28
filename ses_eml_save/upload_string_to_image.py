@@ -44,7 +44,7 @@ async def render_html_string_to_image_and_upload(html_string: str, user_id:str, 
         logger.info(f"Screenshot saved to local file: {image_file}")
 
         # 上传至 Supabase Storage
-        storage_path = f"users/{user_id}/{datetime.utcnow().date().isoformat()}/{image_file}"
+        storage_path = f"save/{user_id}/{datetime.utcnow().date().isoformat()}/{image_file}"
         logger.info(f"Uploading image to Supabase Storage: {storage_path}")
         
         with open(image_file, "rb") as f:

@@ -6,7 +6,8 @@ from fastapi import UploadFile
 from supabase import create_client, Client
 from core.encryption import encrypt_data
 from rcpdro_web_save.insert_data import ReceiptDataPreparer
-from core.ocr import ocr_attachment, extract_fields_from_ocr
+from core.ocr import ocr_attachment
+from core.generation import extract_fields_from_ocr
 from rcpdro_web_save.upload_files import upload_files_to_supabase
 
 

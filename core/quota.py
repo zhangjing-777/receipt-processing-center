@@ -41,6 +41,7 @@ class QuotaManager:
             self.used_month = quota_data.get("used_month", 0)
 
         month_limit = quota_data.get("month_limit", 0)
+        logger.info(f"month_limit is {month_limit}")
         allowed = self.used_month < month_limit
 
         if not allowed:

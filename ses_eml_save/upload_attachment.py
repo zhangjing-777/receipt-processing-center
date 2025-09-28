@@ -38,7 +38,7 @@ def upload_attachments_to_storage(attachments, user_id, bucket=SUPABASE_BUCKET):
 
             date_url = datetime.utcnow().date().isoformat()
             timestamp = datetime.utcnow().isoformat()
-            storage_path = f"users/{user_id}/{date_url}/{timestamp}_{safe_filename}"
+            storage_path = f"save/{user_id}/{date_url}/{timestamp}_{safe_filename}"
             logger.info(f"Generated storage path: {storage_path}")
 
             logger.info(f"Uploading {filename} to storage at {storage_path}")

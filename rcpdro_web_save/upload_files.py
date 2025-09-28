@@ -32,7 +32,7 @@ def upload_files_to_supabase(user_id: str, files: List[UploadFile]) -> Dict[str,
             safe_filename = make_safe_storage_path(file.filename)
             date_url = datetime.utcnow().date().isoformat()
             timestamp = datetime.utcnow().isoformat()
-            storage_path = f"users/{user_id}/{date_url}/{timestamp}_{safe_filename}"
+            storage_path = f"save/{user_id}/{date_url}/{timestamp}_{safe_filename}"
             
             # 上传文件到Supabase存储
             supabase.storage.from_(SUPABASE_BUCKET).upload(

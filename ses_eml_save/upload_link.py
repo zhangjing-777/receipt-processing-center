@@ -48,7 +48,7 @@ def upload_invoice_pdf_to_supabase(pdf_urls: List[str], user_id:str, show: str) 
             logger.info(f"PDF downloaded successfully, size: {len(response.content)} bytes")
 
             id = str(uuid.uuid4())[:8]
-            filename = f"users/{user_id}/{datetime.utcnow().date().isoformat()}/eml_att_{datetime.utcnow().timestamp()}_{id}.pdf"
+            filename = f"save/{user_id}/{datetime.utcnow().date().isoformat()}/eml_att_{datetime.utcnow().timestamp()}_{id}.pdf"
             logger.info(f"Generated storage filename: {filename}")
 
             # 上传到 Supabase Storage

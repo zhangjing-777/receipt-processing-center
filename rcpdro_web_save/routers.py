@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/receiptdrop-web-save", tags=["receiptdrop网页转入"])
 
-@router.post("/webhook/receiptdrop-transfer")
+@router.post("/receiptdrop-transfer")
 async def receiptdrop_transfer(user_id: str, files: List[UploadFile]):
     try:
         logger.info("Starting check and reset quato ...")

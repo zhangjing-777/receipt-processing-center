@@ -186,28 +186,6 @@ def openrouter_pdf_ocr(file_url):
         logger.exception(f"PDF OCR failed: {str(e)}")
         raise
 
-def ocr_attachment(file_path_or_url) -> str:
-    logger.info(f"Starting OCR for attachment: {file_path_or_url}")
-    try:
-        # 判断是存储路径还是完整URL
-        if file_path_or_url.startswith("users/") or (not file_path_or_url.startswith("http")):
-            # 是存储路径，需要从Supabase下载
-            logger.info(f"Processing storage path: {file_path_or_url}")
-            if file_path_or_url.endswith("pdf"):
-                return ocr_pdf_from_storage(file_path_or_url)
-            else:
-                return ocr_image_from_storage(file_path_or_url)
-        else:
-            # 是完整URL，使用原有逻辑
-            logger.info(f"Processing URL: {file_path_or_url}")
-            if file_path_or_url.endswith("pdf"):
-                return openrouter_pdf_ocr(file_path_or_url)
-            else:
-                return openrouter_image_ocr(file_path_or_url)
-    except Exception as e:
-        logger.error(f"OCR failed for {file_path_or_url}: {str(e)}")
-        raise
-
 def ocr_pdf_from_storage(storage_path):
     """直接从Supabase存储下载PDF进行OCR"""
     logger.info(f"Downloading PDF from storage: {storage_path}")
@@ -390,87 +368,25 @@ def ocr_image_from_storage(storage_path):
         logger.exception(f"Storage image OCR failed: {str(e)}")
         raise
 
-# def ocr_attachment(file_url) -> str:
-#     logger.info(f"Starting OCR for attachment: {file_url}")
-#     try:
-#         if file_url.endswith("pdf"):
-#             return openrouter_pdf_ocr(file_url)
-#         else:
-#             return openrouter_image_ocr(file_url)
-#     except Exception as e:
-#         logger.error(f"OCR failed for {file_url}: {str(e)}")
-#         raise
-    
-
-DEEPSEEK_URL = os.getenv("DEEPSEEK_URL") or ""
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-
-DEEP_HEADERS = {
-    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-    "Content-Type": "application/json"
-}
-
-
-
-def extract_fields_from_ocr(text):
-    logger.info("Extracting fields from OCR text.")
-    prompt = f"""This is the raw text extracted from an invoice using OCR. 
-    Please extract the following fields and output them as a JSON object, with strict type and format requirements:
-
-    - invoice_number: string
-    - invoice_date: string, must be in "YYYY-MM-DD" format (ISO 8601), e.g. "2025-06-23"
-    - buyer (purchaser): string
-    - seller (vendor): string
-    - invoice_total: number (do not include any currency symbols, commas, or quotes, just the numeric value, e.g. 1234.56)
-    - currency: string (e.g. "USD", "CNY")
-    - category: string
-    - address: string
-
-    Return only the JSON object, no extra explanation.
-
-    Example output:
-    {{
-      "invoice_number": "INV-20250623-001",
-      "invoice_date": "2025-06-23",
-      "buyer": "Acme Corp",
-      "seller": "Widget Inc",
-      "invoice_total": 1234.56,
-      "currency": "USD",
-      "category": "Office Supplies",
-      "address": "123 Main St, Springfield"
-    }}
-
-    Invoice text is as follows:
-    {text}
-    """
-    data = {
-        "model": "deepseek-chat",  
-        "messages": [
-            {"role": "system", "content": "You are an AI assistant specialized in extracting structured data."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.3,
-        "stream": False
-    }
+def ocr_attachment(file_path_or_url) -> str:
+    logger.info(f"Starting OCR for attachment: {file_path_or_url}")
     try:
-        response = requests.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
-        response.raise_for_status()
-        response_data = response.json()
-        
-        # 记录 token 使用量
-        if "usage" in response_data:
-            usage = response_data["usage"]
-            logger.info(f"Deepseek field extraction token usage - Prompt: {usage.get('prompt_tokens', 'N/A')}, "
-                       f"Completion: {usage.get('completion_tokens', 'N/A')}, "
-                       f"Total: {usage.get('total_tokens', 'N/A')}")
-            print(f"Total: {usage.get('total_tokens', 'N/A')}")
+        # 判断是存储路径还是完整URL
+        if file_path_or_url.startswith("users/") or (not file_path_or_url.startswith("http")):
+            # 是存储路径，需要从Supabase下载
+            logger.info(f"Processing storage path: {file_path_or_url}")
+            if file_path_or_url.endswith("pdf"):
+                return ocr_pdf_from_storage(file_path_or_url)
+            else:
+                return ocr_image_from_storage(file_path_or_url)
         else:
-            logger.warning("No usage information found in Deepseek response")
-        
-        logger.info(f"Deepseek API response: {response.status_code}")
-        return response_data["choices"][0]["message"]["content"]
+            # 是完整URL，使用原有逻辑
+            logger.info(f"Processing URL: {file_path_or_url}")
+            if file_path_or_url.endswith("pdf"):
+                return openrouter_pdf_ocr(file_path_or_url)
+            else:
+                return openrouter_image_ocr(file_path_or_url)
     except Exception as e:
-        logger.exception(f"Field extraction from OCR failed: {str(e)}")
-        raise
-
+        logger.error(f"OCR failed for {file_path_or_url}: {str(e)}")
+        raise   
 

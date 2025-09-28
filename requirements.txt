@@ -11,3 +11,5 @@ playwright
 beautifulsoup4
 cryptography
 python-multipart
+aiohttp
+

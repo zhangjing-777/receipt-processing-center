@@ -5,7 +5,8 @@ from supabase import create_client, Client
 from core.encryption import encrypt_data, decrypt_data
 from ses_eml_save.insert_data import ReceiptDataPreparer
 from ses_eml_save.eml_parser import load_s3, mail_parser
-from core.ocr import ocr_attachment, extract_fields_from_ocr
+from core.ocr import ocr_attachment
+from core.generation import extract_fields_from_ocr
 from ses_eml_save.upload_attachment import upload_attachments_to_storage
 from ses_eml_save.upload_string_to_image import render_html_string_to_image_and_upload
 from ses_eml_save.upload_link import extract_pdf_invoice_urls, upload_invoice_pdf_to_supabase
