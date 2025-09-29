@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from ses_eml_save.routers import router as ses_eml_save_routers
 from rcpdro_web_save.routers import router as rcpdro_web_save_routers
 from summary_download.routers import router as summary_download_routers
+from table_processor.receipt_items_en_router import router as receipt_items_en_routers
 
 # 创建logs目录
 os.makedirs('logs', exist_ok=True)
@@ -27,6 +28,7 @@ app = FastAPI()
 app.include_router(ses_eml_save_routers)
 app.include_router(rcpdro_web_save_routers)
 app.include_router(summary_download_routers)
+app.include_router(receipt_items_en_routers)
 
 @app.get("/health")
 async def health_check():

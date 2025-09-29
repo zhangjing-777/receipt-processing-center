@@ -1,8 +1,7 @@
 import logging
 from fastapi import APIRouter
 from core.quota import QuotaManager
-from ses_eml_save.models import UpdateReceiptRequest, GetReceiptRequest, DeleteReceiptRequest
-from ses_eml_save.services import upload_to_supabase, update_receipt, get_receipt, delete_receipt
+from ses_eml_save.services import upload_to_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -35,20 +34,3 @@ async def ses_email_transfer(bucket, key, user_id):
         logger.exception(f"Upload process failed: {str(e)}")
         return {"error": f"Upload process failed: {str(e)}", "status": "error"}
 
-
-@router.post("/update-receipt-items")
-async def update_receipt_items(request: UpdateReceiptRequest):
-    """根据record_id和user_id更新收据信息接口"""
-    return await update_receipt(request)
-
-
-@router.post("/get-receipt-items")
-async def get_receipt_items(request: GetReceiptRequest):
-    """获取解密后的收据信息"""
-    return await get_receipt(request)
-
-
-@router.delete("/delete-receipt-items")
-async def delete_receipt_items(request: DeleteReceiptRequest):
-    """根据ind和user_id批量删除收据信息"""
-    return await delete_receipt(request)
