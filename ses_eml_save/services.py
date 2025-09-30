@@ -110,7 +110,7 @@ async def upload_to_supabase(bucket, key, user_id):
         # 保存上传结果
         try:
             logger.info("Saving upload result to database...")
-            supabase.table("receipt_items_upload_result").insert({"upload_result": status, "user_id": user_id}).execute()
+            supabase.table("receipt_items_en_upload_result").insert({"upload_result": status, "user_id": user_id}).execute()
             logger.info("Successfully saved upload result to database")
         except Exception as e:
             logger.exception(f"Failed to save upload result to database: {str(e)}")
