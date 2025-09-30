@@ -14,6 +14,7 @@ load_dotenv()
 url: str = os.getenv("SUPABASE_URL") or ""
 key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
 supabase: Client = create_client(url, key)
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,16 @@ async def get_summary_invoices(user_id: str, title:str, invoices: List[Dict], us
     supabase.table("receipt_summary_zip_en").insert(encrypted_insert_data).execute()
     logger.info(f"Successfully inserted data for receipt_summary_zip_en.")
     
+    # 生成签名下载 URL（24 小时有效）
+    try:
+        signed_url_result = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
+            download_url, expires_in=86400
+        )
+        download_url = signed_url_result.get("signedURL", download_url)
+        logger.info(f"Generated signed URL: {download_url}, the download_url is only valid for 24 hours.")
+    except Exception as e:
+        logger.warning(f"Failed to generate signed URL: {e}")
+
     return {
         'title': title,
         'summary': summary_content,

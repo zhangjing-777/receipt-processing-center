@@ -111,17 +111,6 @@ async def generate_download_zip(user_id: str, data: dict):
         logger.error(f"Upload failed: {e}")
         raise
 
-    # 生成签名下载 URL（24 小时有效）
-    try:
-        signed_url_result = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
-            upload_path, expires_in=86400
-        )
-        download_url = signed_url_result.get("signedURL", upload_path)
-        logger.info(f"Generated signed URL: {download_url}, the download_url is only valid for 24 hours.")
-    except Exception as e:
-        logger.warning(f"Failed to generate signed URL: {e}")
-        download_url = upload_path
-
     logger.info("Zip created and uploaded successfully.")
 
-    return download_url
+    return upload_path

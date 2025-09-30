@@ -7,7 +7,7 @@ from supabase import create_client, Client
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from core.encryption import encrypt_data, decrypt_data
-from rcpdro_web_save.upload_files import upload_files_to_supabase
+from core.upload_files import upload_files_to_supabase
 
 load_dotenv()
 
