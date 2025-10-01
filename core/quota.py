@@ -45,7 +45,12 @@ class QuotaManager:
         allowed = self.used_month < month_limit
 
         if not allowed:
-            raise ValueError("⚠️ You have reached your month usage limit. Please try next period or upgrade your plan for more quota.")
+            remark = "⚠️ You have reached your month usage limit. Please try next period or upgrade your plan for more quota."
+            supabase.table(self.table).update({
+                "remark": remark
+            }).eq("user_id", self.user_id).execute()
+            
+            raise ValueError(remark)
 
         if needs_reset:
             # Update reset date and usage
