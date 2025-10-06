@@ -3,10 +3,10 @@ import logging
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from core.encryption import encrypt_data, decrypt_data
-from ses_eml_save.insert_data import ReceiptDataPreparer
+from ses_eml_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
 from ses_eml_save.eml_parser import load_s3, mail_parser
 from core.ocr import ocr_attachment
-from core.generation import extract_fields_from_ocr
+from core.generation import extract_fields_from_ocr, analyze_and_extract_subscription
 from ses_eml_save.upload_attachment import upload_attachments_to_storage
 from ses_eml_save.upload_string_to_image import render_html_string_to_image_and_upload
 from ses_eml_save.upload_link import extract_pdf_invoice_urls, upload_invoice_pdf_to_supabase
@@ -63,6 +63,7 @@ async def upload_to_supabase(bucket, key, user_id):
         # 处理每个文件的OCR和数据提取
         successes = []
         failures = []
+        subscript = []
         
         for i, (filename, public_url) in enumerate(public_urls.items(), 1):
             logger.info(f"Processing file {i}/{len(public_urls)}: {filename}")
@@ -90,6 +91,20 @@ async def upload_to_supabase(bucket, key, user_id):
                 supabase.table("ses_eml_info_en").insert(encrypted_eml_row).execute()
                 logger.info(f"Successfully inserted data for {filename}")
 
+                # 订阅检测
+                try:
+                    extraction = analyze_and_extract_subscription(ocr)
+                    if extraction.is_subscription:
+                        subscript.append(filename)
+                        sub_pre = SubscriptDataPreparer(extraction.subscription_fields, user_id, "email")
+                        subscript_row = sub_pre.build_subscript_data()
+                        encrypted_subscript_row = encrypt_data("subscription_records", subscript_row)               
+                        supabase.table("subscription_records").insert(encrypted_subscript_row).execute()
+                        logger.info(f"Successfully inserted subscription_records data for {filename}")
+                        
+                except Exception as sub_error:
+                    logger.warning(f"Subscription processing failed: {sub_error}")
+
                 successes.append(filename)
                 logger.info(f"File {filename} processed successfully")
                 
@@ -103,7 +118,9 @@ async def upload_to_supabase(bucket, key, user_id):
         success_count = len(successes)
         failure_count = len(failures)
         
-        status = f"""You uploaded a total of {total_files} files: {success_count} succeeded--{successes}, {failure_count} failed--{failures}."""
+        status = f"""You uploaded a total of {total_files} files: {success_count} succeeded--{successes}, {failure_count} failed--{failures}.
+        Subscript files: {subscript}.
+        """
         
         logger.info(f"Processing summary - Total: {total_files}, Success: {success_count}, Failed: {failure_count}")
         

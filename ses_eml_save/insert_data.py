@@ -6,9 +6,10 @@ from core.utils import clean_and_parse_json
 import logging
 
 
-
 logger = logging.getLogger(__name__)
 
+
+RECORD_ID = str(uuid.uuid4())
 
 class ReceiptDataPreparer:
     def __init__(self, user_id, fields: str, raw_attachments: Dict[str, Any], public_url: str, ocr: str):
@@ -16,9 +17,6 @@ class ReceiptDataPreparer:
         self.raw_attachments = raw_attachments
         self.public_url = public_url
         self.ocr = ocr
-
-        # 共享 ID，确保 receipt 和 eml 绑定
-        self.record_id = str(uuid.uuid4())
 
         # 用户名 = 邮箱前缀
         self.user_id = user_id
@@ -53,7 +51,7 @@ class ReceiptDataPreparer:
         logger.info("Building receipt data dictionary.")
         try:
             data = {
-                "id": self.record_id,
+                "id": RECORD_ID,
                 "user_id": self.user_id,
                 "file_url": self.public_url,
                 "original_info": self.raw_attachments.get("body", ""),
@@ -71,7 +69,7 @@ class ReceiptDataPreparer:
         logger.info("Building EML data dictionary.")
         try:
             data = {
-                "id": self.record_id,
+                "id": RECORD_ID,
                 "user_id": self.user_id,
                 "from": self.raw_attachments.get("from_email", ""),
                 "to": self.raw_attachments.get("to_email", ""),
@@ -85,4 +83,59 @@ class ReceiptDataPreparer:
             return data
         except Exception as e:
             logger.exception(f"Failed to build EML data: {str(e)}")
+            raise
+
+
+class SubscriptDataPreparer:
+    def __init__(self, fields: str, user_id: str, source: str):
+        self.user_id = user_id
+        self.source = source
+        self.fields = clean_and_parse_json(fields)
+
+    def determine_status(self) -> str:
+        """根据字段确定订阅状态"""
+        next_renewal = self.fields.get("next_renewal_date")
+        end_date = self.fields.get("end_date")
+        
+        if end_date:
+            end = datetime.fromisoformat(end_date).date()
+            if end < datetime.now().date():
+                return "expired"
+        
+        if next_renewal:
+            renewal = datetime.fromisoformat(next_renewal).date()
+            days_until = (renewal - datetime.now().date()).days
+            
+            if days_until < 0:
+                return "expired"
+            elif days_until <= 7:
+                return "expiring"
+        
+        return "active"
+
+    def build_subscript_data(self) -> Dict[str, Any]:
+        logger.info("Building subscript data dictionary.")
+        try:
+            data = {
+                "id": RECORD_ID,
+                "user_id": self.user_id,
+                "seller_name": self.fields.get("seller_name", ""),
+                "plan_name": self.fields.get("plan_name", ""),
+                "billing_cycle": self.fields.get("billing_cycle", "monthly"),
+                "amount": self.fields.get("amount", 0),
+                "currency": self.fields.get("currency", "USD"),
+                "start_date": self.fields.get("start_date"),
+                "next_renewal_date": self.fields.get("next_renewal_date"),
+                "end_date": self.fields.get("end_date"),
+                "status": self.determine_status(self.fields),
+                "source": self.source,
+                "note": self.fields.get("note"),
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            logger.info(f"Subscript data built successfully: {data}")
+            return data
+        except Exception as e:
+            logger.exception(f"Failed to build subscript data: {str(e)}")
             raise

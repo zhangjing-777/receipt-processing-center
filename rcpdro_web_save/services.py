@@ -6,9 +6,9 @@ from fastapi import UploadFile
 from supabase import create_client, Client
 from core.encryption import encrypt_data
 from core.ocr import ocr_attachment
-from core.generation import extract_fields_from_ocr
+from core.generation import extract_fields_from_ocr, analyze_and_extract_subscription
 from core.upload_files import upload_files_to_supabase
-from rcpdro_web_save.insert_data import ReceiptDataPreparer
+from rcpdro_web_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
 
 load_dotenv()
 
@@ -27,6 +27,7 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
         # 处理每个文件的OCR和数据提取
         successes = []
         failures = []
+        subscript = []
         
         for i, (filename, public_url) in enumerate(public_urls.items(), 1):
             logger.info(f"Processing file {i}/{len(public_urls)}: {filename}")
@@ -34,21 +35,32 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
             try:
                 logger.info(f"Starting OCR for {filename}...")
                 ocr = ocr_attachment(public_url)
-                logger.info(f"OCR completed for {filename}, text length: {len(ocr)} characters")
                 
                 logger.info(f"Extracting fields from OCR for {filename}...")
                 fields = extract_fields_from_ocr(ocr)
-                logger.info(f"Field extraction completed for {filename}")
 
-                logger.info(f"Preparing data for {filename}...")
+                logger.info(f"Preparing receipt data for {filename}...")
                 preparer = ReceiptDataPreparer(fields, user_id, public_url, ocr)
                 receipt_row = preparer.build_receipt_data()
-                logger.info(f"Data preparation completed for {filename}")
 
-                encrypted_receipt_row = encrypt_data("receipt_items_en", receipt_row)
                 logger.info(f"Inserting receipt_items_en for {filename}...")
+                encrypted_receipt_row = encrypt_data("receipt_items_en", receipt_row)               
                 supabase.table("receipt_items_en").insert(encrypted_receipt_row).execute()
                 logger.info(f"Successfully inserted data for {filename}")
+
+                # 订阅检测
+                try:
+                    extraction = analyze_and_extract_subscription(ocr)
+                    if extraction.is_subscription:
+                        subscript.append(filename)
+                        sub_pre = SubscriptDataPreparer(extraction.subscription_fields, user_id, "web")
+                        subscript_row = sub_pre.build_subscript_data()
+                        encrypted_subscript_row = encrypt_data("subscription_records", subscript_row)               
+                        supabase.table("subscription_records").insert(encrypted_subscript_row).execute()
+                        logger.info(f"Successfully inserted subscription_records data for {filename}")
+                        
+                except Exception as sub_error:
+                    logger.warning(f"Subscription processing failed: {sub_error}")
 
                 successes.append(filename)
                 logger.info(f"File {filename} processed successfully")
@@ -63,7 +75,9 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
         success_count = len(successes)
         failure_count = len(failures)
         
-        status = f"""You uploaded a total of {total_files} files: {success_count} succeeded--{successes}, {failure_count} failed--{failures}."""
+        status = f"""You uploaded a total of {total_files} files: {success_count} succeeded--{successes}, {failure_count} failed--{failures}.
+        Subscript files: {subscript}.
+        """
         
         logger.info(f"Processing summary - Total: {total_files}, Success: {success_count}, Failed: {failure_count}")
         
@@ -81,3 +95,4 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
     except Exception as e:
         logger.exception(f"Critical error in upload_to_supabase for user_id {user_id}: {str(e)}")
         raise
+

@@ -19,7 +19,6 @@ DEEP_HEADERS = {
 }
 
 
-
 def extract_fields_from_ocr(text):
     logger.info("Extracting fields from OCR text.")
     prompt = f"""This is the raw text extracted from an invoice using OCR. 
@@ -82,6 +81,88 @@ def extract_fields_from_ocr(text):
         raise
 
 
+def analyze_and_extract_subscription(ocr_text: str) -> dict:
+    """
+    智能分析发票类型并提取字段
+    
+    如果是订阅发票，返回订阅字段；
+    如果是普通发票，返回 None
+    
+    Returns:
+        dict: {
+            "is_subscription": bool,
+            "subscription_fields": dict or None
+        }
+    """
+    logger.info("Analyzing invoice type with AI...")
+    
+    prompt = f"""Analyze this OCR text from an invoice and determine if it's a subscription/recurring payment invoice.
+
+A subscription invoice typically includes:
+- Recurring payment terms (monthly, quarterly, yearly)
+- Service/SaaS providers (like Netflix, Spotify, Claude, AWS, Adobe, etc.)
+- Words like: subscription, renewal, auto-renew, membership, recurring, billing cycle
+- Future billing dates
+
+If this IS a subscription invoice, extract these fields as JSON:
+{{
+  "is_subscription": true,
+  "subscription_fields": {{
+    "seller_name": "service provider name",
+    "plan_name": "plan/subscription name",
+    "billing_cycle": "monthly/quarterly/yearly/one-time",
+    "amount": numeric_value,
+    "currency": "USD/EUR/CNY",
+    "start_date": "YYYY-MM-DD or null",
+    "next_renewal_date": "YYYY-MM-DD or null",
+    "end_date": "YYYY-MM-DD or null",
+    "invoice_number": "string or null",
+    "note": "any important info"
+  }}
+}}
+
+If this is NOT a subscription invoice (regular one-time purchase, meal receipt, taxi, hotel, etc.), return:
+{{
+  "is_subscription": false,
+  "subscription_fields": null
+}}
+
+Return ONLY valid JSON, no explanation.
+
+OCR text:
+{ocr_text}
+"""
+    
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "You are an AI that accurately identifies subscription invoices vs regular invoices."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2,
+        "stream": False
+    }
+    
+    try:
+        response = requests.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
+        response.raise_for_status()
+        response_data = response.json()
+        
+        if "usage" in response_data:
+            usage = response_data["usage"]
+            logger.info(f"AI invoice analysis token usage - Total: {usage.get('total_tokens', 'N/A')}")
+        
+        content = response_data["choices"][0]["message"]["content"]
+        logger.info(f"AI analysis completed")
+        
+        return content
+        
+    except Exception as e:
+        logger.exception(f"AI invoice analysis failed: {str(e)}")
+        # 失败时返回非订阅，走普通流程
+        return json.dumps({"is_subscription": False, "subscription_fields": None})
+   
+    
 def generate_summary(invoices_info: Dict):
     logger.info("Starting generate summary ...")
     system_message = """

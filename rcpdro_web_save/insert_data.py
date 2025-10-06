@@ -7,9 +7,9 @@ import logging
 from core.utils import clean_and_parse_json
 
 
-
 logger = logging.getLogger(__name__)
 
+RECORD_ID = str(uuid.uuid4())
 
 def normalize_invoice_date(raw_date: str) -> str | None:
     """
@@ -46,8 +46,6 @@ class ReceiptDataPreparer:
         self.public_url = public_url
         self.ocr = ocr
 
-        self.record_id = str(uuid.uuid4())
-
         # 解析字段
         self.items = self.parse_fields()
 
@@ -78,7 +76,7 @@ class ReceiptDataPreparer:
         logger.info("Building receipt data dictionary.")
         try:
             data = {
-                "id": self.record_id,
+                "id": RECORD_ID,
                 "user_id": self.user_id,
                 "file_url": self.public_url,
                 "original_info": "from_n8n_listener",
@@ -92,3 +90,57 @@ class ReceiptDataPreparer:
             logger.exception(f"Failed to build receipt data: {str(e)}")
             raise
 
+
+class SubscriptDataPreparer:
+    def __init__(self, fields: str, user_id: str, source: str):
+        self.user_id = user_id
+        self.source = source
+        self.fields = clean_and_parse_json(fields)
+
+    def determine_status(self) -> str:
+        """根据字段确定订阅状态"""
+        next_renewal = self.fields.get("next_renewal_date")
+        end_date = self.fields.get("end_date")
+        
+        if end_date:
+            end = datetime.fromisoformat(end_date).date()
+            if end < datetime.now().date():
+                return "expired"
+        
+        if next_renewal:
+            renewal = datetime.fromisoformat(next_renewal).date()
+            days_until = (renewal - datetime.now().date()).days
+            
+            if days_until < 0:
+                return "expired"
+            elif days_until <= 7:
+                return "expiring"
+        
+        return "active"
+
+    def build_subscript_data(self) -> Dict[str, Any]:
+        logger.info("Building subscript data dictionary.")
+        try:
+            data = {
+                "id": RECORD_ID,
+                "user_id": self.user_id,
+                "seller_name": self.fields.get("seller_name", ""),
+                "plan_name": self.fields.get("plan_name", ""),
+                "billing_cycle": self.fields.get("billing_cycle", "monthly"),
+                "amount": self.fields.get("amount", 0),
+                "currency": self.fields.get("currency", "USD"),
+                "start_date": self.fields.get("start_date"),
+                "next_renewal_date": self.fields.get("next_renewal_date"),
+                "end_date": self.fields.get("end_date"),
+                "status": self.determine_status(self.fields),
+                "source": self.source,
+                "note": self.fields.get("note"),
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            
+            logger.info(f"Subscript data built successfully: {data}")
+            return data
+        except Exception as e:
+            logger.exception(f"Failed to build subscript data: {str(e)}")
+            raise
