@@ -6,6 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import logging
 import os
+import uuid
 
 from core.encryption import encrypt_data, decrypt_data
 
@@ -32,6 +33,7 @@ class UpdateRequest(BaseModel):
     ind: int = Field(..., description="记录唯一标识")
     user_id: str = Field(..., description="用户ID")
 
+    id: Optional[uuid.UUID] = Field(default=None, description="对应到receipt_items_en表的id字段")
     seller_name: Optional[str] = Field(default=None, description="服务商名称，例如：OpenAI, Notion, Cursor 等")
     plan_name: Optional[str] = Field(default=None, description="订阅套餐名称，例如：Pro Plan, Business Plan 等")
     billing_cycle: Optional[str] = Field(default=None, description="计费周期：monthly, quarterly, yearly, one-time")
@@ -224,6 +226,55 @@ async def update_subscription(request: UpdateRequest):
     except Exception as e:
         logger.exception(f"Failed to update subscription_records: {str(e)}")
         return {"error": f"Failed to update subscription_records: {str(e)}", "status": "error"}
+
+
+@router.post("/upsert-subscription")
+async def upsert_subscription(request: UpdateRequest):
+    """根据 ind 和 user_id 更新或新增 subscription_records 表"""
+    try:
+        update_data = {}
+        for field, value in request.dict(exclude={'ind', 'user_id'}, by_alias=True).items():
+            if value and value != "string":
+                update_data[field] = value
+
+        if not update_data:
+            return {"message": "No data provided", "status": "success"}
+
+        # 设置更新时间
+        update_data["updated_at"] = datetime.utcnow().isoformat()
+
+        # 若是新增，自动补充 created_at
+        if "created_at" not in update_data:
+            update_data["created_at"] = datetime.utcnow().isoformat()
+
+        # 加密需要加密的字段
+        encrypted_update_data = encrypt_data("subscription_records", update_data)
+
+        # ⚡ 添加主键信息
+        encrypted_update_data["ind"] = request.ind
+        encrypted_update_data["user_id"] = request.user_id
+
+        # ⚡ 使用 upsert（Supabase 会自动判断存在则更新，不存在则插入）
+        result = (
+            supabase.table("subscription_records")
+            .upsert(encrypted_update_data, on_conflict="ind")
+            .execute()
+        )
+
+        if not result.data:
+            return {"message": "No records affected", "status": "success"}
+
+        decrypted_result = [decrypt_data("subscription_records", record) for record in result.data]
+        return {
+            "message": "Subscription record upserted successfully",
+            "affected_records": len(result.data),
+            "data": decrypted_result,
+            "status": "success"
+        }
+
+    except Exception as e:
+        logger.exception(f"Failed to upsert subscription_records: {str(e)}")
+        return {"error": f"Failed to upsert subscription_records: {str(e)}", "status": "error"}
 
 
 @router.delete("/delete-subscriptions")
