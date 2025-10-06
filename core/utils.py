@@ -4,6 +4,8 @@ import unicodedata
 import hashlib
 from pypinyin import lazy_pinyin
 import logging
+from typing import Any, Dict
+
 
 
 logger = logging.getLogger(__name__)
@@ -42,16 +44,56 @@ def make_safe_storage_path(filename: str, prefix: str = "") -> str:
     logger.info(f"Sanitized filename result: {result}")
     return result
 
-def clean_and_parse_json(text: str) -> dict:
-    logger.info("Cleaning and parsing JSON text.")
-    try:
-        # 尝试清洗 Markdown 代码块 ```json 或 ``` 包裹的内容
-        cleaned = re.sub(r"^```(?:json|python)?\n", "", text.strip(), flags=re.IGNORECASE)
-        cleaned = re.sub(r"\n```$", "", cleaned.strip())
-        # 加载为 JSON 字典
-        result = json.loads(cleaned)
-        logger.info("JSON parsed successfully.")
-        return result
-    except Exception as e:
-        logger.exception(f"Failed to clean and parse JSON: {str(e)}")
-        raise
+
+def clean_and_parse_json(text: Any) -> Dict:
+    """
+    清洗并解析 JSON 内容。
+    支持以下输入类型：
+    - dict：直接返回
+    - str：自动清洗 ```json 包裹并解析
+    - bytes：先解码再解析
+    """
+    logger.info("Cleaning and parsing JSON input.")
+
+    # 🧩 情况 1：如果已经是 dict，直接返回
+    if isinstance(text, dict):
+        logger.info("Input is already a dict, returning directly.")
+        return text
+
+    # 🧩 情况 2：如果是 bytes，先转成 str
+    if isinstance(text, bytes):
+        try:
+            text = text.decode("utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to decode bytes input: {e}")
+            raise ValueError("Invalid bytes input for JSON parsing")
+
+    # 🧩 情况 3：如果是字符串，尝试清洗并解析
+    if isinstance(text, str):
+        try:
+            # 去掉 markdown 代码块包装，如 ```json ... ```
+            cleaned = re.sub(r"^```(?:json|python)?\s*", "", text.strip(), flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+
+            # 尝试解析 JSON
+            result = json.loads(cleaned)
+            logger.info("JSON parsed successfully.")
+            return result
+        except json.JSONDecodeError as e:
+            logger.warning(f"Primary JSON decode failed: {e}. Trying literal_eval fallback...")
+
+            # 兼容单引号 JSON 的 fallback
+            import ast
+            try:
+                result = ast.literal_eval(cleaned)
+                if isinstance(result, dict):
+                    logger.info("Parsed using ast.literal_eval fallback.")
+                    return result
+                else:
+                    raise ValueError("Parsed object is not a dict")
+            except Exception as e2:
+                logger.exception(f"Failed to clean and parse JSON: {str(e2)}")
+                raise ValueError(f"Cannot parse JSON string: {text[:200]}") from e2
+
+    # 🧩 其他类型不支持
+    raise TypeError(f"Unsupported input type: {type(text)}")

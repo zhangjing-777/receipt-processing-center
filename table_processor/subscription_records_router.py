@@ -24,8 +24,8 @@ class GetRequest(BaseModel):
     user_id: str  # 必填
     ind: Optional[int] = None  # 精确查询
     status: Optional[str] = None
-    start_time: Optional[str] = None  # YYYY-MM-DD
-    end_time: Optional[str] = None    # YYYY-MM-DD
+    start_date: Optional[str] = None  # YYYY-MM-DD
+    end_date: Optional[str] = None    # YYYY-MM-DD
     limit: Optional[int] = 10
     offset: Optional[int] = 0
 
@@ -64,19 +64,19 @@ def get_subscriptions(request: GetRequest):
         if request.ind:
             query = query.eq("ind", request.ind)
         
-        elif request.status:
+        elif request.status != "string":
             query = query.eq("status", request.status)
         
         elif request.start_date != "string" and request.end_date != "string":
             start_dt = datetime.strptime(request.start_date, "%Y-%m-%d")
-            query = query.gte("created_at", start_dt.isoformat())
+            query = query.gte("start_date", start_dt.isoformat())
 
             end_dt = datetime.strptime(request.end_date, "%Y-%m-%d")
             end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-            query = query.lte("created_at", end_dt.isoformat())
+            query = query.lte("start_date", end_dt.isoformat())
         
         else:
-            query = query.order("created_at", desc=False).range(request.offset, request.offset + request.limit - 1)
+            query = query.order("start_date", desc=False).range(request.offset, request.offset + request.limit - 1)
         
         result = query.execute()
         

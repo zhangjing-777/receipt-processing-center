@@ -1,7 +1,7 @@
 import re
 import uuid
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any
 import logging
 from core.utils import clean_and_parse_json
@@ -99,22 +99,12 @@ class SubscriptDataPreparer:
 
     def determine_status(self) -> str:
         """根据字段确定订阅状态"""
-        next_renewal = self.fields.get("next_renewal_date")
         end_date = self.fields.get("end_date")
         
         if end_date:
             end = datetime.fromisoformat(end_date).date()
-            if end < datetime.now().date():
+            if end < (datetime.now().date() - timedelta(days=31)):
                 return "expired"
-        
-        if next_renewal:
-            renewal = datetime.fromisoformat(next_renewal).date()
-            days_until = (renewal - datetime.now().date()).days
-            
-            if days_until < 0:
-                return "expired"
-            elif days_until <= 7:
-                return "expiring"
         
         return "active"
 
@@ -132,7 +122,7 @@ class SubscriptDataPreparer:
                 "start_date": self.fields.get("start_date"),
                 "next_renewal_date": self.fields.get("next_renewal_date"),
                 "end_date": self.fields.get("end_date"),
-                "status": self.determine_status(self.fields),
+                "status": self.determine_status(),
                 "source": self.source,
                 "note": self.fields.get("note"),
                 "created_at": datetime.utcnow().isoformat(),

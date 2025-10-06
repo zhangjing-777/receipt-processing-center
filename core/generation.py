@@ -96,7 +96,81 @@ def analyze_and_extract_subscription(ocr_text: str) -> dict:
     """
     logger.info("Analyzing invoice type with AI...")
     
-    prompt = f"""Analyze this OCR text from an invoice and determine if it's a subscription/recurring payment invoice.
+    prompt = f"""
+You are a financial invoice analysis agent.
+
+Your task:
+Analyze the OCR-extracted text from an invoice and determine whether it represents a **subscription or recurring payment** (e.g., SaaS, cloud, membership, hosting, etc.).
+
+---
+
+### Subscription Identification Criteria
+A subscription/recurring invoice usually includes:
+- Terms like “monthly”, “quarterly”, “annual”, “auto-renew”, “recurring”, “plan”, “billing period”, or “renewal”.
+- Service or SaaS providers (e.g. AWS, Adobe, Claude, Hetzner, Cursor, Netflix, etc.)
+- Periods such as “09/2025”, “Sep 2025”, “2025-09”, “Billing Period: ...”
+- Total recurring cost or plans related to projects or accounts.
+
+If it is a subscription invoice, **extract the following fields** and infer missing ones logically.
+
+---
+
+### Extraction Fields (output as JSON)
+{{
+  "is_subscription": true,
+  "subscription_fields": {{
+    "seller_name": "service provider name",
+    "plan_name": "plan/subscription name",
+    "billing_cycle": "monthly/quarterly/yearly/one-time",
+    "amount": numeric_value,
+    "currency": "USD/EUR/CNY/other",
+    "start_date": "YYYY-MM-DD or null",
+    "next_renewal_date": "YYYY-MM-DD or null",
+    "end_date": "YYYY-MM-DD or null",
+    "invoice_number": "string or null",
+    "note": "any relevant contextual info"
+  }}
+}}
+
+---
+
+### 🧠 Date inference logic (VERY IMPORTANT)
+If the invoice contains a **period like “09/2025”**, assume:
+- It represents the covered service month.
+- If billing_cycle = “monthly” → 
+  - start_date = first day of that month (e.g., 2025-09-01)
+  - end_date = first day of the next month (e.g., 2025-10-01)
+- If billing_cycle = “quarterly” → 
+  - start_date = first day of the first month in that quarter
+  - end_date = first day of the next quarter
+- If billing_cycle = “yearly” → 
+  - start_date = first day of the year
+  - end_date = first day of the next year
+- If the invoice explicitly mentions “period from ... to ...”, use those directly.
+
+If no billing_cycle is mentioned but the text contains words like "for September", "09/2025", or "Monthly", treat it as **monthly**.
+
+---
+
+### Output Requirements
+- Return ONLY a valid JSON.
+- If it’s NOT a subscription invoice (e.g., taxi, hotel, restaurant, one-time order), return:
+{{
+  "is_subscription": false,
+  "subscription_fields": null
+}}
+- Do NOT include explanations or additional text.
+
+---
+
+OCR text:
+{ocr_text}
+"""
+
+    
+    
+    
+    pro2 = f"""Analyze this OCR text from an invoice and determine if it's a subscription/recurring payment invoice.
 
 A subscription invoice typically includes:
 - Recurring payment terms (monthly, quarterly, yearly)

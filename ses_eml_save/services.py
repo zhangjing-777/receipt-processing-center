@@ -6,6 +6,7 @@ from core.encryption import encrypt_data, decrypt_data
 from ses_eml_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
 from ses_eml_save.eml_parser import load_s3, mail_parser
 from core.ocr import ocr_attachment
+from core.utils import clean_and_parse_json
 from core.generation import extract_fields_from_ocr, analyze_and_extract_subscription
 from ses_eml_save.upload_attachment import upload_attachments_to_storage
 from ses_eml_save.upload_string_to_image import render_html_string_to_image_and_upload
@@ -93,10 +94,11 @@ async def upload_to_supabase(bucket, key, user_id):
 
                 # 订阅检测
                 try:
-                    extraction = analyze_and_extract_subscription(ocr)
-                    if extraction.is_subscription:
+                    extracted = analyze_and_extract_subscription(ocr)
+                    extracted = clean_and_parse_json(extracted)
+                    if extracted.get("is_subscription"):
                         subscript.append(filename)
-                        sub_pre = SubscriptDataPreparer(extraction.subscription_fields, user_id, "email")
+                        sub_pre = SubscriptDataPreparer(extracted.get("subscription_fields"), user_id, "email")
                         subscript_row = sub_pre.build_subscript_data()
                         encrypted_subscript_row = encrypt_data("subscription_records", subscript_row)               
                         supabase.table("subscription_records").insert(encrypted_subscript_row).execute()
