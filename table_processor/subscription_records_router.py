@@ -112,95 +112,91 @@ def get_subscriptions(request: GetRequest):
 @router.post("/get-subscription-stats")
 def get_subscription_stats(user_id: str, year: int = None) -> dict:
     """
-    获取订阅统计信息
-    
-    Returns:
-        dict: 包含年度、月度、平均支出等统计数据
+    获取订阅统计信息（仅统计 active 状态）
+    包含：概览、按币种支出、按计费周期分布
     """
     logger.info(f"Generating subscription statistics for user: {user_id}")
     
     try:
         if not year:
             year = datetime.now().year
-        
-        # 查询所有活跃订阅
-        result = supabase.table("subscription_records").select("*").eq("user_id", user_id).in_("status", ["active", "expiring"]).execute()
-        
+
+        # ✅ 仅查询 active 订阅
+        result = (
+            supabase.table("subscription_records")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )
+
         if not result.data:
             return {
-                "total_active": 0,
-                "annual_cost": 0,
-                "monthly_average": 0,
-                "by_currency": {},
-                "by_cycle": {},
-                "upcoming_renewals": []
+                "overview": {
+                    "total_active": 0,
+                    "annual_costs_by_currency": {},
+                    "monthly_average_by_currency": {}
+                },
+                "by_currency": [],
+                "by_billing_cycle": []
             }
-        
-        # 解密数据
-        subscriptions = [decrypt_data("subscription_records", record) for record in result.data]
-        
-        # 统计计算
-        total_active = sum(1 for s in subscriptions if s.get("status") == "active")
-        
-        # 按货币统计
-        by_currency = {}
-        for sub in subscriptions:
-            currency = sub.get("currency", "USD")
-            amount = sub.get("amount", 0)
-            cycle = sub.get("billing_cycle", "monthly")
-            
-            # 转换为年度成本
-            annual = calculate_annual_cost(amount, cycle)
-            
-            if currency not in by_currency:
-                by_currency[currency] = 0
-            by_currency[currency] += annual
-        
-        # 按周期统计
+
+        subscriptions = [decrypt_data("subscription_records", r) for r in result.data]
+
+        # === 📊 概览 ===
+        total_active = len(subscriptions)
+
+        # === 💶 按货币统计 ===
+        currency_stats = {}
+        for s in subscriptions:
+            currency = s.get("currency", "USD")
+            amount = float(s.get("amount") or 0)
+            cycle = s.get("billing_cycle", "monthly")
+            annual_cost = calculate_annual_cost(amount, cycle)
+
+            if currency not in currency_stats:
+                currency_stats[currency] = {"annual_total": 0.0, "monthly_avg": 0.0, "count": 0}
+
+            currency_stats[currency]["annual_total"] += annual_cost
+            currency_stats[currency]["count"] += 1
+
+        for c in currency_stats.values():
+            c["monthly_avg"] = round(c["annual_total"] / 12, 2)
+
+        by_currency_list = [
+            {
+                "currency": c,
+                "annual_total": round(v["annual_total"], 2),
+                "monthly_avg": v["monthly_avg"],
+                "subscription_count": v["count"],
+            }
+            for c, v in sorted(currency_stats.items(), key=lambda x: x[1]["annual_total"], reverse=True)
+        ]
+
+        # === ⏱️ 按计费周期统计 ===
         by_cycle = {}
-        for sub in subscriptions:
-            cycle = sub.get("billing_cycle", "monthly")
-            if cycle not in by_cycle:
-                by_cycle[cycle] = 0
-            by_cycle[cycle] += 1
-        
-        # 即将续费（未来30天）
-        today = datetime.now().date()
-        upcoming = []
-        for sub in subscriptions:
-            next_renewal = sub.get("next_renewal_date")
-            if next_renewal:
-                renewal_date = datetime.fromisoformat(next_renewal).date()
-                days_until = (renewal_date - today).days
-                if 0 <= days_until <= 30:
-                    upcoming.append({
-                        "seller_name": sub.get("seller_name"),
-                        "plan_name": sub.get("plan_name"),
-                        "amount": sub.get("amount"),
-                        "currency": sub.get("currency"),
-                        "renewal_date": next_renewal,
-                        "days_until": days_until
-                    })
-        
-        upcoming.sort(key=lambda x: x["days_until"])
-        
-        # 月均支出（默认使用第一个货币）
-        primary_currency = list(by_currency.keys())[0] if by_currency else "USD"
-        annual_cost = by_currency.get(primary_currency, 0)
-        monthly_average = round(annual_cost / 12, 2)
-        
-        return {
+        for s in subscriptions:
+            cycle = s.get("billing_cycle", "monthly")
+            by_cycle[cycle] = by_cycle.get(cycle, 0) + 1
+        by_cycle_list = [{"cycle": k, "count": v} for k, v in by_cycle.items()]
+
+        # === 组织返回结构 ===
+        overview = {
             "total_active": total_active,
-            "annual_cost": annual_cost,
-            "monthly_average": monthly_average,
-            "by_currency": by_currency,
-            "by_cycle": by_cycle,
-            "upcoming_renewals": upcoming[:10]  # 最多返回10个
+            "annual_costs_by_currency": {k: round(v["annual_total"], 2) for k, v in currency_stats.items()},
+            "monthly_average_by_currency": {k: v["monthly_avg"] for k, v in currency_stats.items()},
         }
-        
+
+        return {
+            "overview": overview,
+            "by_currency": by_currency_list,
+            "by_billing_cycle": by_cycle_list,
+        }
+
     except Exception as e:
         logger.exception(f"Failed to generate subscription stats: {str(e)}")
         raise
+
 
 @router.post("/update-subscription")
 async def update_subscription(request: UpdateRequest):
