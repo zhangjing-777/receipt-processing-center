@@ -6,7 +6,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 import logging
 import os
-import uuid
 
 from core.encryption import encrypt_data, decrypt_data
 
@@ -33,7 +32,7 @@ class UpdateRequest(BaseModel):
     ind: int = Field(..., description="记录唯一标识")
     user_id: str = Field(..., description="用户ID")
 
-    id: Optional[uuid.UUID] = Field(default=None, description="对应到receipt_items_en表的id字段")
+    id: Optional[str] = Field(default=None, description="对应到receipt_items_en表的id字段")
     seller_name: Optional[str] = Field(default=None, description="服务商名称，例如：OpenAI, Notion, Cursor 等")
     plan_name: Optional[str] = Field(default=None, description="订阅套餐名称，例如：Pro Plan, Business Plan 等")
     billing_cycle: Optional[str] = Field(default=None, description="计费周期：monthly, quarterly, yearly, one-time")
