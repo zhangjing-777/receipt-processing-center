@@ -2,6 +2,7 @@ import os
 import logging
 from datetime import datetime
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from ses_eml_save.routers import router as ses_eml_save_routers
 from rcpdro_web_save.routers import router as rcpdro_web_save_routers
 from summary_download.routers import router as summary_download_routers
@@ -27,6 +28,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# 添加CORS中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # 包含路由
 app.include_router(ses_eml_save_routers)
