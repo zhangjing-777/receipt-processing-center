@@ -46,6 +46,23 @@ class UpdateRequest(BaseModel):
     note: Optional[str] = Field(default=None, description="备注或系统识别说明")
 
 
+class InsertRequest(BaseModel):
+    user_id: str = Field(..., description="用户ID")
+
+    id: Optional[str] = Field(default=None, description="对应到receipt_items_en表的id字段")
+    seller_name: Optional[str] = Field(default=None, description="服务商名称，例如：OpenAI, Notion, Cursor 等")
+    plan_name: Optional[str] = Field(default=None, description="订阅套餐名称，例如：Pro Plan, Business Plan 等")
+    billing_cycle: Optional[str] = Field(default=None, description="计费周期：monthly, quarterly, yearly, one-time")
+    amount: Optional[float] = Field(default=None, description="订阅金额")
+    currency: Optional[str] = Field(default=None, description="货币类型，例如：USD, EUR, CNY")
+    start_date: Optional[str] = Field(default=None, description="订阅开始日期，格式 YYYY-MM-DD")
+    next_renewal_date: Optional[str] = Field(default=None, description="下次续费日期，格式 YYYY-MM-DD")
+    end_date: Optional[str] = Field(default=None, description="订阅结束日期，格式 YYYY-MM-DD")
+    status: Optional[str] = Field(default=None, description="订阅状态：active, expiring, expired")
+    source: Optional[str] = Field(default=None, description="订阅来源，例如：web, email")
+    note: Optional[str] = Field(default=None, description="备注或系统识别说明")
+
+
 class DeleteRequest(BaseModel):
     user_id: str
     inds: List[int]
@@ -75,7 +92,7 @@ def get_subscriptions(request: GetRequest):
             query = query.lte("start_date", end_dt.isoformat())
         
         else:
-            query = query.order("start_date", desc=False).range(request.offset, request.offset + request.limit - 1)
+            query = query.order("start_date", desc=True).range(request.offset, request.offset + request.limit - 1)
         
         result = query.execute()
         
@@ -112,7 +129,6 @@ def get_subscription_stats(user_id: str, year: int = None) -> dict:
         if not result.data:
             return {
                 "total_active": 0,
-                "total_expiring": 0,
                 "annual_cost": 0,
                 "monthly_average": 0,
                 "by_currency": {},
@@ -125,7 +141,6 @@ def get_subscription_stats(user_id: str, year: int = None) -> dict:
         
         # 统计计算
         total_active = sum(1 for s in subscriptions if s.get("status") == "active")
-        total_expiring = sum(1 for s in subscriptions if s.get("status") == "expiring")
         
         # 按货币统计
         by_currency = {}
@@ -176,7 +191,6 @@ def get_subscription_stats(user_id: str, year: int = None) -> dict:
         
         return {
             "total_active": total_active,
-            "total_expiring": total_expiring,
             "annual_cost": annual_cost,
             "monthly_average": monthly_average,
             "by_currency": by_currency,
@@ -226,11 +240,13 @@ async def update_subscription(request: UpdateRequest):
         logger.exception(f"Failed to update subscription_records: {str(e)}")
         return {"error": f"Failed to update subscription_records: {str(e)}", "status": "error"}
 
-
-@router.post("/upsert-subscription")
-async def upsert_subscription(request: UpdateRequest):
-    """根据 ind 和 user_id 更新或新增 subscription_records 表"""
+@router.post("/insert-subscription")
+async def insert_subscription(request: InsertRequest):
+    """
+    新增一条 subscription_records 记录（数据库自动自增 ind）
+    """
     try:
+        # Step 1️⃣ 提取有效字段
         update_data = {}
         for field, value in request.dict(exclude={'ind', 'user_id'}, by_alias=True).items():
             if value and value != "string":
@@ -239,41 +255,40 @@ async def upsert_subscription(request: UpdateRequest):
         if not update_data:
             return {"message": "No data provided", "status": "success"}
 
-        # 设置更新时间
-        update_data["updated_at"] = datetime.utcnow().isoformat()
-
-        # 若是新增，自动补充 created_at
+        # Step 2️⃣ 时间戳处理
+        now_utc = datetime.utcnow().isoformat()
+        update_data["updated_at"] = now_utc
         if "created_at" not in update_data:
-            update_data["created_at"] = datetime.utcnow().isoformat()
+            update_data["created_at"] = now_utc
 
-        # 加密需要加密的字段
-        encrypted_update_data = encrypt_data("subscription_records", update_data)
+        # Step 3️⃣ 加密字段
+        encrypted_data = encrypt_data("subscription_records", update_data)
 
-        # ⚡ 添加主键信息
-        encrypted_update_data["ind"] = request.ind
-        encrypted_update_data["user_id"] = request.user_id
-
-        # ⚡ 使用 upsert（Supabase 会自动判断存在则更新，不存在则插入）
+        # ✅ 新增逻辑（数据库自动自增 ind）
+        encrypted_data["user_id"] = request.user_id
         result = (
             supabase.table("subscription_records")
-            .upsert(encrypted_update_data, on_conflict="ind")
+            .insert(encrypted_data)
             .execute()
         )
 
         if not result.data:
-            return {"message": "No records affected", "status": "success"}
+            return {"message": "Insert failed", "status": "error"}
 
-        decrypted_result = [decrypt_data("subscription_records", record) for record in result.data]
+        decrypted_result = [decrypt_data("subscription_records", r) for r in result.data]
         return {
-            "message": "Subscription record upserted successfully",
+            "message": "New subscription record inserted successfully",
             "affected_records": len(result.data),
             "data": decrypted_result,
             "status": "success"
         }
 
     except Exception as e:
-        logger.exception(f"Failed to upsert subscription_records: {str(e)}")
-        return {"error": f"Failed to upsert subscription_records: {str(e)}", "status": "error"}
+        logger.exception(f"Failed to insert subscription_records: {str(e)}")
+        return {
+            "error": f"Failed to insert subscription_records: {str(e)}",
+            "status": "error"
+        }
 
 
 @router.delete("/delete-subscriptions")
