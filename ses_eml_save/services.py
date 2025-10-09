@@ -119,9 +119,10 @@ async def upload_to_supabase(bucket, key, user_id):
         total_files = len(successes) + len(failures)
         success_count = len(successes)
         failure_count = len(failures)
+        subscription_count = len(subscript)
         
         status = f"""You uploaded a total of {total_files} files: {success_count} succeeded--{successes}, {failure_count} failed--{failures}.
-        Subscript files: {subscript}.
+        {subscription_count} subscriptions--{subscript}.
         """
         
         logger.info(f"Processing summary - Total: {total_files}, Success: {success_count}, Failed: {failure_count}")
