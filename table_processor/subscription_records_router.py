@@ -68,7 +68,7 @@ class DeleteRequest(BaseModel):
     inds: List[int]
 
 @router.post("/get-subscriptions")
-def get_subscriptions(request: GetRequest):
+async def get_subscriptions(request: GetRequest):
     """
     查询订阅记录
     """
@@ -110,7 +110,7 @@ def get_subscriptions(request: GetRequest):
         raise
 
 @router.post("/get-subscription-stats")
-def get_subscription_stats(user_id: str, year: int = None) -> dict:
+async def get_subscription_stats(user_id: str, year: int = None) -> dict:
     """
     获取订阅统计信息（仅统计 active 状态）
     包含：概览、按币种支出、按计费周期分布
