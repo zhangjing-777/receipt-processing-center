@@ -2,24 +2,15 @@ import os
 import uuid
 import logging
 from datetime import datetime
-from dotenv import load_dotenv
 from supabase import create_client, Client
 from playwright.async_api import async_playwright
+from core.config import settings
 
-
-
-load_dotenv()
 
 # 设置日志
 logger = logging.getLogger(__name__)
 
-# Supabase config
-SUPABASE_URL = os.getenv("SUPABASE_URL") or ""
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
+supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 
 async def render_html_string_to_image_and_upload(html_string: str, user_id:str, filename: str) -> dict:
@@ -48,14 +39,14 @@ async def render_html_string_to_image_and_upload(html_string: str, user_id:str, 
         logger.info(f"Uploading image to Supabase Storage: {storage_path}")
         
         with open(image_file, "rb") as f:
-            supabase.storage.from_(SUPABASE_BUCKET).upload(storage_path, f, {
+            supabase.storage.from_(settings.supabase_bucket).upload(storage_path, f, {
                 "content-type": "image/png"
             })
         
         logger.info("Image uploaded successfully to Supabase Storage")
 
         # 获取公开 URL
-        #public_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path).rstrip('?')
+        #public_url = supabase.storage.from_(settings.supabase_bucket).get_public_url(storage_path).rstrip('?')
         #logger.info(f"Generated public URL: {public_url}")
 
         # 清理本地临时文件

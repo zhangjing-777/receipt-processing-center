@@ -1,23 +1,21 @@
-import os
 import logging
-from dotenv import load_dotenv
+from sqlalchemy import insert
 from supabase import create_client, Client
-from core.encryption import encrypt_data, decrypt_data
-from ses_eml_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
-from ses_eml_save.eml_parser import load_s3, mail_parser
+from core.database import AsyncSessionLocal
+from core.models import ReceiptItemsEN, SesEmlInfoEN, SubscriptionRecords, ReceiptItemsENUploadResult
+from core.config import settings
+from core.encryption import encrypt_data
 from core.ocr import ocr_attachment
 from core.utils import clean_and_parse_json
 from core.generation import extract_fields_from_ocr, analyze_and_extract_subscription
+from ses_eml_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
+from ses_eml_save.eml_parser import load_s3, mail_parser
 from ses_eml_save.upload_attachment import upload_attachments_to_storage
 from ses_eml_save.upload_string_to_image import render_html_string_to_image_and_upload
 from ses_eml_save.upload_link import extract_pdf_invoice_urls, upload_invoice_pdf_to_supabase
 
-load_dotenv()
 
-url: str = os.getenv("SUPABASE_URL") or ""
-key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
-supabase: Client = create_client(url, key)
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
+supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +84,16 @@ async def upload_to_supabase(bucket, key, user_id):
 
                 encrypted_receipt_row = encrypt_data("receipt_items_en", receipt_row)
                 encrypted_eml_row = encrypt_data("ses_eml_info_en", eml_row)
-                logger.info(f"Inserting receipt_items_en for {filename}...")
-                supabase.table("receipt_items_en").insert(encrypted_receipt_row).execute()
-                logger.info(f"Inserting ses_eml_info_en for {filename}...")
-                supabase.table("ses_eml_info_en").insert(encrypted_eml_row).execute()
-                logger.info(f"Successfully inserted data for {filename}")
+                
+                async with AsyncSessionLocal() as session:
+                    await session.execute(
+                        insert(ReceiptItemsEN).values(encrypted_receipt_row)
+                    ) 
+                    await session.execute(
+                        insert(SesEmlInfoEN).values(encrypted_eml_row)
+                    )                           
+                    await session.commit()
+                    logger.info(f"Inserting receipt_items_en/ses_eml_info_en for {filename}...")
 
                 # 订阅检测
                 try:
@@ -100,8 +103,12 @@ async def upload_to_supabase(bucket, key, user_id):
                         subscript.append(filename)
                         sub_pre = SubscriptDataPreparer(extracted.get("subscription_fields"), user_id, "email")
                         subscript_row = sub_pre.build_subscript_data()
-                        encrypted_subscript_row = encrypt_data("subscription_records", subscript_row)               
-                        supabase.table("subscription_records").insert(encrypted_subscript_row).execute()
+                        encrypted_subscript_row = encrypt_data("subscription_records", subscript_row) 
+                        async with AsyncSessionLocal() as session:
+                            await session.execute(
+                                insert(SubscriptionRecords).values(encrypted_subscript_row)
+                            )                           
+                            await session.commit()
                         logger.info(f"Successfully inserted subscription_records data for {filename}")
                         
                 except Exception as sub_error:
@@ -128,12 +135,15 @@ async def upload_to_supabase(bucket, key, user_id):
         logger.info(f"Processing summary - Total: {total_files}, Success: {success_count}, Failed: {failure_count}")
         
         # 保存上传结果
-        try:
-            logger.info("Saving upload result to database...")
-            supabase.table("receipt_items_en_upload_result").insert({"upload_result": status, "user_id": user_id}).execute()
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                insert(ReceiptItemsENUploadResult).values({
+                    "upload_result": status,
+                    "user_id": user_id
+                })
+            )
+            await session.commit()
             logger.info("Successfully saved upload result to database")
-        except Exception as e:
-            logger.exception(f"Failed to save upload result to database: {str(e)}")
         
         logger.info(f"upload_to_supabase completed successfully. Final status: {status}")
         return status, success_count

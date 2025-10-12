@@ -1,19 +1,14 @@
-from supabase import create_client, Client
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
-from dotenv import load_dotenv
 import logging
-import os
 
+from sqlalchemy import select, update, delete, and_, insert
+from core.database import AsyncSessionLocal
+from core.models import SubscriptionRecords
 from core.encryption import encrypt_data, decrypt_data
 
-load_dotenv()
-
-url: str = os.getenv("SUPABASE_URL") or ""
-key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
-supabase: Client = create_client(url, key)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +62,8 @@ class DeleteRequest(BaseModel):
     user_id: str
     inds: List[int]
 
+
+
 @router.post("/get-subscriptions")
 async def get_subscriptions(request: GetRequest):
     """
@@ -75,32 +72,53 @@ async def get_subscriptions(request: GetRequest):
     logger.info(f"Querying subscriptions for user: {request.user_id}")
     
     try:
-        query = supabase.table("subscription_records").select("*").eq("user_id", request.user_id)
-        
-        if request.ind:
-            query = query.eq("ind", request.ind)
-        
-        elif request.status != "string":
-            query = query.eq("status", request.status)
-        
-        elif request.start_date != "string" and request.end_date != "string":
-            start_dt = datetime.strptime(request.start_date, "%Y-%m-%d")
-            query = query.gte("start_date", start_dt.isoformat())
+        async with AsyncSessionLocal() as session:
+            query = select(SubscriptionRecords).where(SubscriptionRecords.user_id == request.user_id)
+            
+            if request.ind:
+                query = query.where(SubscriptionRecords.ind == request.ind)
+            
+            elif request.status != "string":
+                query = query.where(SubscriptionRecords.status == request.status)
+            
+            elif request.start_date != "string" and request.end_date != "string":
+                start_dt = datetime.strptime(request.start_date, "%Y-%m-%d").date()
+                query = query.where(SubscriptionRecords.start_date >= start_dt)
 
-            end_dt = datetime.strptime(request.end_date, "%Y-%m-%d")
-            end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-            query = query.lte("start_date", end_dt.isoformat())
+                end_dt = datetime.strptime(request.end_date, "%Y-%m-%d").date()
+                query = query.where(SubscriptionRecords.start_date <= end_dt)
+            
+            else:
+                query = query.order_by(SubscriptionRecords.start_date.desc()).offset(request.offset).limit(request.limit)
+            
+            result = await session.execute(query)
+            records = result.scalars().all()
         
-        else:
-            query = query.order("start_date", desc=True).range(request.offset, request.offset + request.limit - 1)
-        
-        result = query.execute()
-        
-        if not result.data:
+        if not records:
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
         
         # 解密敏感字段
-        decrypted_result = [decrypt_data("subscription_records", record) for record in result.data]
+        decrypted_result = []
+        for record in records:
+            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+            # 转换类型
+            if record_dict.get('start_date'):
+                record_dict['start_date'] = record_dict['start_date'].isoformat()
+            if record_dict.get('next_renewal_date'):
+                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
+            if record_dict.get('end_date'):
+                record_dict['end_date'] = record_dict['end_date'].isoformat()
+            if record_dict.get('created_at'):
+                record_dict['created_at'] = record_dict['created_at'].isoformat()
+            if record_dict.get('updated_at'):
+                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
+            if record_dict.get('id'):
+                record_dict['id'] = str(record_dict['id'])
+            if record_dict.get('user_id'):
+                record_dict['user_id'] = str(record_dict['user_id'])
+            
+            decrypted = decrypt_data("subscription_records", record_dict)
+            decrypted_result.append(decrypted)
         
         logger.info(f"Found {len(decrypted_result)} subscription records")
         return  {"message": "Query success", "data": decrypted_result, "total": len(decrypted_result), "status": "success"}
@@ -122,15 +140,14 @@ async def get_subscription_stats(user_id: str, year: int = None) -> dict:
             year = datetime.now().year
 
         # ✅ 仅查询 active 订阅
-        result = (
-            supabase.table("subscription_records")
-            .select("*")
-            .eq("user_id", user_id)
-            .eq("status", "active")
-            .execute()
-        )
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(SubscriptionRecords)
+                .where(and_(SubscriptionRecords.user_id == user_id, SubscriptionRecords.status == "active"))
+            )
+            records = result.scalars().all()
 
-        if not result.data:
+        if not records:
             return {
                 "overview": {
                     "total_active": 0,
@@ -141,7 +158,27 @@ async def get_subscription_stats(user_id: str, year: int = None) -> dict:
                 "by_billing_cycle": []
             }
 
-        subscriptions = [decrypt_data("subscription_records", r) for r in result.data]
+        subscriptions = []
+        for record in records:
+            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+            # 转换类型
+            if record_dict.get('start_date'):
+                record_dict['start_date'] = record_dict['start_date'].isoformat()
+            if record_dict.get('next_renewal_date'):
+                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
+            if record_dict.get('end_date'):
+                record_dict['end_date'] = record_dict['end_date'].isoformat()
+            if record_dict.get('created_at'):
+                record_dict['created_at'] = record_dict['created_at'].isoformat()
+            if record_dict.get('updated_at'):
+                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
+            if record_dict.get('id'):
+                record_dict['id'] = str(record_dict['id'])
+            if record_dict.get('user_id'):
+                record_dict['user_id'] = str(record_dict['user_id'])
+            
+            decrypted = decrypt_data("subscription_records", record_dict)
+            subscriptions.append(decrypted)
 
         # === 📊 概览 ===
         total_active = len(subscriptions)
@@ -210,24 +247,47 @@ async def update_subscription(request: UpdateRequest):
         if not update_data:
             return {"message": "No data to update", "status": "success"}
         
-        update_data["updated_at"] = datetime.utcnow().isoformat()
+        update_data["updated_at"] = datetime.utcnow()
         encrypted_update_data = encrypt_data("subscription_records", update_data)
 
-        result = (
-            supabase.table("subscription_records")
-            .update(encrypted_update_data)
-            .eq("ind", request.ind)
-            .eq("user_id", request.user_id)
-            .execute()
-        )
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(SubscriptionRecords)
+                .where(and_(SubscriptionRecords.ind == request.ind, SubscriptionRecords.user_id == request.user_id))
+                .values(**encrypted_update_data)
+                .returning(SubscriptionRecords)
+            )
+            await session.commit()
+            updated_records = result.scalars().all()
 
-        if not result.data:
+        if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
-        decrypted_result = [decrypt_data("subscription_records", record) for record in result.data]
+        decrypted_result = []
+        for record in updated_records:
+            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+            # 转换类型
+            if record_dict.get('start_date'):
+                record_dict['start_date'] = record_dict['start_date'].isoformat()
+            if record_dict.get('next_renewal_date'):
+                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
+            if record_dict.get('end_date'):
+                record_dict['end_date'] = record_dict['end_date'].isoformat()
+            if record_dict.get('created_at'):
+                record_dict['created_at'] = record_dict['created_at'].isoformat()
+            if record_dict.get('updated_at'):
+                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
+            if record_dict.get('id'):
+                record_dict['id'] = str(record_dict['id'])
+            if record_dict.get('user_id'):
+                record_dict['user_id'] = str(record_dict['user_id'])
+            
+            decrypted = decrypt_data("subscription_records", record_dict)
+            decrypted_result.append(decrypted)
+        
         return {
             "message": "Subscription records updated successfully",
-            "updated_records": len(result.data),
+            "updated_records": len(decrypted_result),
             "data": decrypted_result,
             "status": "success"
         }
@@ -243,38 +303,61 @@ async def insert_subscription(request: InsertRequest):
     """
     try:
         # Step 1️⃣ 提取有效字段
-        update_data = {}
-        for field, value in request.dict(exclude={'ind', 'user_id'}, by_alias=True).items():
+        insert_data = {}
+        for field, value in request.dict(exclude={'user_id'}, by_alias=True).items():
             if value and value != "string":
-                update_data[field] = value
+                insert_data[field] = value
 
-        if not update_data:
+        if not insert_data:
             return {"message": "No data provided", "status": "success"}
 
         # Step 2️⃣ 时间戳处理
-        now_utc = datetime.utcnow().isoformat()
-        update_data["updated_at"] = now_utc
-        if "created_at" not in update_data:
-            update_data["created_at"] = now_utc
+        now_utc = datetime.utcnow()
+        insert_data["updated_at"] = now_utc
+        if "created_at" not in insert_data:
+            insert_data["created_at"] = now_utc
 
         # Step 3️⃣ 加密字段
-        encrypted_data = encrypt_data("subscription_records", update_data)
+        encrypted_data = encrypt_data("subscription_records", insert_data)
 
         # ✅ 新增逻辑（数据库自动自增 ind）
         encrypted_data["user_id"] = request.user_id
-        result = (
-            supabase.table("subscription_records")
-            .insert(encrypted_data)
-            .execute()
-        )
+        
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                insert(SubscriptionRecords).values([encrypted_data]).returning(SubscriptionRecords)
+            )
+            await session.commit()
+            inserted_records = result.scalars().all()
 
-        if not result.data:
+        if not inserted_records:
             return {"message": "Insert failed", "status": "error"}
 
-        decrypted_result = [decrypt_data("subscription_records", r) for r in result.data]
+        decrypted_result = []
+        for record in inserted_records:
+            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+            # 转换类型
+            if record_dict.get('start_date'):
+                record_dict['start_date'] = record_dict['start_date'].isoformat()
+            if record_dict.get('next_renewal_date'):
+                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
+            if record_dict.get('end_date'):
+                record_dict['end_date'] = record_dict['end_date'].isoformat()
+            if record_dict.get('created_at'):
+                record_dict['created_at'] = record_dict['created_at'].isoformat()
+            if record_dict.get('updated_at'):
+                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
+            if record_dict.get('id'):
+                record_dict['id'] = str(record_dict['id'])
+            if record_dict.get('user_id'):
+                record_dict['user_id'] = str(record_dict['user_id'])
+            
+            decrypted = decrypt_data("subscription_records", record_dict)
+            decrypted_result.append(decrypted)
+        
         return {
             "message": "New subscription record inserted successfully",
-            "affected_records": len(result.data),
+            "affected_records": len(decrypted_result),
             "data": decrypted_result,
             "status": "success"
         }
@@ -294,15 +377,16 @@ async def delete_subscriptions(request: DeleteRequest):
         if not request.inds:
             return {"error": "inds list cannot be empty", "status": "error"}
 
-        result = (
-            supabase.table("subscription_records")
-            .delete()
-            .eq("user_id", request.user_id)
-            .in_("ind", request.inds)
-            .execute()
-        )
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                delete(SubscriptionRecords)
+                .where(and_(SubscriptionRecords.user_id == request.user_id, SubscriptionRecords.ind.in_(request.inds)))
+                .returning(SubscriptionRecords)
+            )
+            await session.commit()
+            deleted_data = result.scalars().all()
+            deleted_count = len(deleted_data)
 
-        deleted_count = len(result.data) if result.data else 0
         return {
             "message": "Records deleted successfully",
             "deleted_count": deleted_count,
@@ -324,5 +408,3 @@ def calculate_annual_cost(amount: float, cycle: str) -> float:
         return amount
     else:  # one-time
         return 0
-
-

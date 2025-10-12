@@ -1,20 +1,18 @@
-import os
 import logging
-from dotenv import load_dotenv
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from sqlalchemy import select, update, delete, and_
+from core.database import AsyncSessionLocal
+from core.config import settings
+from core.models import ReceiptItemsEN, SesEmlInfoEN
 from core.encryption import encrypt_data, decrypt_data
 from core.upload_files import upload_files_to_supabase
 
-load_dotenv()
 
-url: str = os.getenv("SUPABASE_URL") or ""
-key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
-supabase: Client = create_client(url, key)
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
+supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 logger = logging.getLogger(__name__)
 
@@ -65,60 +63,75 @@ async def get_receipt(request: GetReceiptRequest):
     )
 
     try:
-        query = supabase.table("receipt_items_en").select("*").eq("user_id", request.user_id)
+        async with AsyncSessionLocal() as session:
+            query = select(ReceiptItemsEN).where(ReceiptItemsEN.user_id == request.user_id)
 
-        if request.ind:
-            # ① 精确查询
-            query = query.eq("ind", request.ind)
-            logger.info(f"Exact query for record id: {request.ind}")
+            if request.ind:
+                # ① 精确查询
+                query = query.where(ReceiptItemsEN.ind == request.ind)
+                logger.info(f"Exact query for record id: {request.ind}")
 
-        elif request.start_time != "string" or request.end_time != "string":
-            # ② 时间范围查询
-            if request.start_time != "string":
-                try:
-                    start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
-                    query = query.gte("create_time", start_dt.isoformat())
-                except ValueError:
-                    return {"error": "Invalid start_time format, expected YYYY-MM-DD", "status": "error"}
+            elif request.start_time != "string" or request.end_time != "string":
+                # ② 时间范围查询
+                if request.start_time != "string":
+                    try:
+                        start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
+                        query = query.where(ReceiptItemsEN.create_time >= start_dt)
+                    except ValueError:
+                        return {"error": "Invalid start_time format, expected YYYY-MM-DD", "status": "error"}
 
-            if request.end_time != "string":
-                try:
-                    end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
-                    # 包含当天 → 设置为当天的最后一秒
-                    end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-                    query = query.lte("create_time", end_dt.isoformat())
-                except ValueError:
-                    return {"error": "Invalid end_time format, expected YYYY-MM-DD", "status": "error"}
+                if request.end_time != "string":
+                    try:
+                        end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
+                        # 包含当天 → 设置为当天的最后一秒
+                        end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                        query = query.where(ReceiptItemsEN.create_time <= end_dt)
+                    except ValueError:
+                        return {"error": "Invalid end_time format, expected YYYY-MM-DD", "status": "error"}
 
-            query = query.order("create_time", desc=True)
-            logger.info(f"Time range query: {request.start_time} - {request.end_time}")
+                query = query.order_by(ReceiptItemsEN.create_time.desc())
+                logger.info(f"Time range query: {request.start_time} - {request.end_time}")
 
-        else:
-            # ③ 分页查询
-            query = query.order("create_time", desc=True).range(
-                request.offset, request.offset + request.limit - 1
-            )
-            logger.info(f"Paginated query with limit: {request.limit}, offset: {request.offset}")
-        logger.info(f"query is {query}")
-        result = query.execute()
+            else:
+                # ③ 分页查询
+                query = query.order_by(ReceiptItemsEN.create_time.desc()).offset(request.offset).limit(request.limit)
+                logger.info(f"Paginated query with limit: {request.limit}, offset: {request.offset}")
+            
+            logger.info(f"query is {query}")
+            result = await session.execute(query)
+            records = result.scalars().all()
 
-        if not result.data:
-            return {"message": "No records found", "data": [], "total": 0, "status": "success"}
+            if not records:
+                return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-        decrypted_result = [decrypt_data("receipt_items_en", record) for record in result.data]
+            decrypted_result = []
+            for record in records:
+                record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+                # 转换日期和时间戳为字符串
+                if record_dict.get('invoice_date'):
+                    record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
+                if record_dict.get('create_time'):
+                    record_dict['create_time'] = record_dict['create_time'].isoformat()
+                if record_dict.get('id'):
+                    record_dict['id'] = str(record_dict['id'])
+                if record_dict.get('user_id'):
+                    record_dict['user_id'] = str(record_dict['user_id'])
+                
+                decrypted = decrypt_data("receipt_items_en", record_dict)
+                
+                # 生成 signed URL
+                if decrypted.get("file_url"):
+                    try:
+                        signed_url_result = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
+                            decrypted["file_url"], expires_in=86400
+                        )
+                        decrypted["file_url"] = signed_url_result.get("signedURL", decrypted["file_url"])
+                    except Exception as e:
+                        logger.warning(f"Failed to generate signed URL for {decrypted['file_url']}: {e}")
+                
+                decrypted_result.append(decrypted)
 
-        # 生成 signed URL
-        for record in decrypted_result:
-            if record.get("file_url"):
-                try:
-                    signed_url_result = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
-                        record["file_url"], expires_in=86400
-                    )
-                    record["file_url"] = signed_url_result.get("signedURL", record["file_url"])
-                except Exception as e:
-                    logger.warning(f"Failed to generate signed URL for {record['file_url']}: {e}")
-
-        return decrypted_result
+            return decrypted_result
 
     except Exception as e:
         logger.exception(f"Failed to retrieve receipts: {str(e)}")
@@ -147,21 +160,40 @@ async def update_receipt(request: UpdateReceiptRequest):
         encrypted_update_data = encrypt_data("receipt_items_en", update_data)
         
         # 执行数据库更新
-        result = supabase.table("receipt_items_en").update(encrypted_update_data).eq("ind", request.ind).eq("user_id", request.user_id).execute()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(ReceiptItemsEN)
+                .where(and_(ReceiptItemsEN.ind == request.ind, ReceiptItemsEN.user_id == request.user_id))
+                .values(**encrypted_update_data)
+                .returning(ReceiptItemsEN)
+            )
+            await session.commit()
+            updated_records = result.scalars().all()
         
-        if not result.data:
+        if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
         
         # 解密返回数据中的敏感字段
         decrypted_result = []
-        for record in result.data:
-            decrypted_record = decrypt_data("receipt_items_en", record)
+        for record in updated_records:
+            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+            # 转换类型
+            if record_dict.get('invoice_date'):
+                record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
+            if record_dict.get('create_time'):
+                record_dict['create_time'] = record_dict['create_time'].isoformat()
+            if record_dict.get('id'):
+                record_dict['id'] = str(record_dict['id'])
+            if record_dict.get('user_id'):
+                record_dict['user_id'] = str(record_dict['user_id'])
+            
+            decrypted_record = decrypt_data("receipt_items_en", record_dict)
             decrypted_result.append(decrypted_record)
         
-        logger.info(f"Successfully updated {len(result.data)} record(s)")
+        logger.info(f"Successfully updated {len(updated_records)} record(s)")
         return {
             "message": "Receipt information updated successfully", 
-            "updated_records": len(result.data),
+            "updated_records": len(updated_records),
             "data": decrypted_result,
             "status": "success"
         }
@@ -187,22 +219,24 @@ async def update_file_url(
 
         logger.info("更新数据库里的 file_url 字段（存加密值）")
         try:
-            update_result = (
-                supabase.table("receipt_items_en")
-                .update({"file_url": encrypted_path})
-                .eq("user_id", user_id)
-                .eq("ind", ind)
-                .execute()
-            )
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    update(ReceiptItemsEN)
+                    .where(and_(ReceiptItemsEN.user_id == user_id, ReceiptItemsEN.ind == ind))
+                    .values(file_url=encrypted_path)
+                    .returning(ReceiptItemsEN)
+                )
+                await session.commit()
+                update_result_data = result.scalars().all()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to update database: {str(e)}")
 
-        if not update_result.data:
+        if not update_result_data:
             raise HTTPException(status_code=404, detail="Record not found to update")
 
         logger.info("返回签名 URL（24小时有效）")
         try:
-            signed_url_result = supabase.storage.from_(SUPABASE_BUCKET).create_signed_url(
+            signed_url_result = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
                 storage_path, expires_in=86400
             )
             signed_url = signed_url_result.get("signedURL", storage_path)
@@ -231,54 +265,54 @@ async def delete_receipt(request: DeleteReceiptRequest):
             return {"error": "ind list cannot be empty", "status": "error"}
         
         # 1. 查询 receipt_items_en，拿到 id 和 file_url
-        receipt_query_result = (
-            supabase.table("receipt_items_en")
-            .select("id, ind, file_url")
-            .eq("user_id", request.user_id)
-            .in_("ind", request.inds)
-            .execute()
-        )
+        async with AsyncSessionLocal() as session:
+            receipt_query_result = await session.execute(
+                select(ReceiptItemsEN.id, ReceiptItemsEN.ind, ReceiptItemsEN.file_url)
+                .where(and_(ReceiptItemsEN.user_id == request.user_id, ReceiptItemsEN.ind.in_(request.inds)))
+            )
+            records = receipt_query_result.all()
         
-        if not receipt_query_result.data:
+        if not records:
             return {"message": "No matching records found", "deleted_count": 0, "status": "success"}
         
-        found_ids = [record["id"] for record in receipt_query_result.data]
-        found_inds = [record["ind"] for record in receipt_query_result.data]
+        found_ids = [record.id for record in records]
+        found_inds = [record.ind for record in records]
         
         # 2. 删除 receipt_items_en 表中的记录
-        receipt_delete_result = (
-            supabase.table("receipt_items_en")
-            .delete()
-            .eq("user_id", request.user_id)
-            .in_("ind", found_inds)
-            .execute()
-        )
-        receipt_deleted_count = len(receipt_delete_result.data) if receipt_delete_result.data else 0
-        
-        # 3. 删除 ses_eml_info_en 表中的对应记录
-        eml_delete_result = (
-            supabase.table("ses_eml_info_en")
-            .delete()
-            .eq("user_id", request.user_id)
-            .in_("id", found_ids)
-            .execute()
-        )
-        eml_deleted_count = len(eml_delete_result.data) if eml_delete_result.data else 0
+        async with AsyncSessionLocal() as session:
+            receipt_delete_result = await session.execute(
+                delete(ReceiptItemsEN)
+                .where(and_(ReceiptItemsEN.user_id == request.user_id, ReceiptItemsEN.ind.in_(found_inds)))
+                .returning(ReceiptItemsEN)
+            )
+            receipt_deleted_data = receipt_delete_result.scalars().all()
+            receipt_deleted_count = len(receipt_deleted_data)
+            
+            # 3. 删除 ses_eml_info_en 表中的对应记录
+            eml_delete_result = await session.execute(
+                delete(SesEmlInfoEN)
+                .where(and_(SesEmlInfoEN.user_id == request.user_id, SesEmlInfoEN.id.in_(found_ids)))
+                .returning(SesEmlInfoEN)
+            )
+            eml_deleted_data = eml_delete_result.scalars().all()
+            eml_deleted_count = len(eml_deleted_data)
+            
+            await session.commit()
         
         # 4. 删除 Supabase Storage 中的文件
         deleted_files = []
         failed_files = []
         
-        for record in receipt_query_result.data:
-            if record.get("file_url"):
+        for record in records:
+            if record.file_url:
                 try:
                     # 解密 file_url
-                    decrypted_url = decrypt_data("receipt_items_en", record).get("file_url")
+                    decrypted_url = decrypt_data("receipt_items_en", {"file_url": record.file_url}).get("file_url")
                     
                     if decrypted_url:
-                        try:                           
+                        try:
                             # 调用 Supabase Storage API 删除文件
-                            supabase.storage.from_(SUPABASE_BUCKET).remove([decrypted_url])
+                            supabase.storage.from_(settings.supabase_bucket).remove([decrypted_url])
                             deleted_files.append(decrypted_url)
                             logger.info(f"Deleted file from storage: {decrypted_url}")
                         except:
@@ -287,7 +321,7 @@ async def delete_receipt(request: DeleteReceiptRequest):
                         failed_files.append("empty file_url")
                 except Exception as e:
                     logger.warning(f"Failed to delete file from storage: {e}")
-                    failed_files.append(record.get("file_url"))
+                    failed_files.append(str(record.file_url))
         
         # 检查是否有未找到的 ind
         not_found_inds = list(set(request.inds) - set(found_inds))
@@ -311,3 +345,4 @@ async def delete_receipt(request: DeleteReceiptRequest):
     except Exception as e:
         logger.exception(f"Failed to delete receipts: {str(e)}")
         return {"error": f"Failed to delete receipts: {str(e)}", "status": "error"}
+    

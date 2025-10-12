@@ -1,22 +1,16 @@
-import os
 import base64
 import logging
 from datetime import datetime
-from dotenv import load_dotenv
 from supabase import create_client, Client
+from core.config import settings
 from core.utils import make_safe_storage_path
 
 
-load_dotenv()
-
-SUPABASE_URL = os.getenv("SUPABASE_URL") or ""
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
+supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 logger = logging.getLogger(__name__)
 
-def upload_attachments_to_storage(attachments, user_id, bucket=SUPABASE_BUCKET):
+def upload_attachments_to_storage(attachments, user_id, bucket=settings.supabase_bucket):
     logger.info(f"Starting attachment upload process for {len(attachments)} attachments to bucket: {bucket}")
 
     records = {}

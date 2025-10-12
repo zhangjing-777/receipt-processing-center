@@ -15,14 +15,14 @@ async def receiptdrop_transfer(user_id: str, files: List[UploadFile]):
     try:
         logger.info("Starting check and reset quato ...")
         quato_manager = QuotaManager(user_id, table="receipt_usage_quota_receipt_en")
-        quato_manager.check_and_reset()
+        await quato_manager.check_and_reset()
         logger.info("Check and reset quato successfully")
 
         status, success_count = await upload_to_supabase(user_id, files)
 
         logger.info("Starting update usage count ...")
         if success_count:
-            quato_manager.increment_usage(success_count)
+            await quato_manager.increment_usage(success_count)
             logger.info("Update usage count successfully")
         
         return status
@@ -30,4 +30,3 @@ async def receiptdrop_transfer(user_id: str, files: List[UploadFile]):
     except Exception as e:
         logger.info(f"Error in upload_receipts: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-

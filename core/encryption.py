@@ -1,21 +1,12 @@
-import os
 import base64
 import logging
 from cryptography.fernet import Fernet
-from dotenv import load_dotenv
-
-load_dotenv()
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# 获取加密密钥，如果不存在则生成新的
-ENCRYPTION_KEY = base64.b64decode(os.getenv("ENCRYPTION_KEY"))
-# if not ENCRYPTION_KEY:
-#     # 生成新密钥并提示用户保存到环境变量
-#     new_key = Fernet.generate_key().decode()
-#     logger.warning(f"No ENCRYPTION_KEY found. Generated new key: {new_key}")
-#     logger.warning("Please add this key to your .env file: ENCRYPTION_KEY=" + new_key)
-#     ENCRYPTION_KEY = new_key
+# 获取加密密钥
+ENCRYPTION_KEY = settings.encryption_key_bytes
 
 fernet = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else ENCRYPTION_KEY)
 

@@ -2,10 +2,13 @@ import os
 import logging
 from dotenv import load_dotenv
 from typing import Dict, List
+from sqlalchemy import insert
 from collections import defaultdict
 from supabase import create_client, Client
 from core.generation import generate_summary
 from core.encryption import encrypt_data
+from core.models import ReceiptSummaryZipEN
+from core.database import AsyncSessionLocal
 from summary_download.download_zip import generate_download_zip
 from summary_download.normalizing import serialize_for_invoices, render_summary
 
@@ -63,7 +66,11 @@ async def get_summary_invoices(user_id: str, title:str, invoices: List[Dict], us
     encrypted_insert_data = encrypt_data("receipt_summary_zip_en", insert_data)
 
     logger.info(f"Inserting receipt_summary_zip_en ...")
-    supabase.table("receipt_summary_zip_en").insert(encrypted_insert_data).execute()
+    async with AsyncSessionLocal() as session:
+            await session.execute(
+                insert(ReceiptSummaryZipEN).values(encrypted_insert_data)
+            )
+            await session.commit()
     logger.info(f"Successfully inserted data for receipt_summary_zip_en.")
     
     # 生成签名下载 URL（24 小时有效）

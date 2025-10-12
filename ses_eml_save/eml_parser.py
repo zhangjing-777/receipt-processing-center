@@ -1,18 +1,10 @@
-import os
 import boto3
 import mailparser
-from dotenv import load_dotenv
 import logging
-
-
-load_dotenv()
+from core.config import settings
 
 
 logger = logging.getLogger(__name__)
-
-AWS_REGION = os.getenv("AWS_REGION")
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 
 
 def load_s3(bucket, key):
@@ -20,9 +12,9 @@ def load_s3(bucket, key):
     try:
         s3 = boto3.client(
             "s3",
-            region_name=AWS_REGION,
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+            region_name=settings.aws_region,
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key
         )
         response = s3.get_object(Bucket=bucket, Key=key)
         logger.info("S3 object loaded successfully.")

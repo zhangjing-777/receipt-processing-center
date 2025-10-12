@@ -1,25 +1,18 @@
-import os
 import uuid
 import requests
 import logging
 from io import BytesIO
 from typing import List
 from datetime import datetime
-from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
+from core.config import settings
 
-load_dotenv()
 
 # 设置日志
 logger = logging.getLogger(__name__)
 
-# Supabase config
-SUPABASE_URL = os.getenv("SUPABASE_URL") or ""
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 def extract_pdf_invoice_urls(html: str) -> list[str]:
     logger.info("Extracting PDF invoice URLs from HTML content")
@@ -54,11 +47,11 @@ def upload_invoice_pdf_to_supabase(pdf_urls: List[str], user_id:str, show: str) 
             # 上传到 Supabase Storage
             logger.info(f"Uploading PDF to Supabase Storage: {filename}")
             file = BytesIO(response.content).getvalue()
-            supabase.storage.from_(SUPABASE_BUCKET).upload(file=file, path=filename, file_options={"content-type": "application/pdf"})
+            supabase.storage.from_(settings.supabase_bucket).upload(file=file, path=filename, file_options={"content-type": "application/pdf"})
             logger.info(f"PDF uploaded successfully to Supabase")
 
             # 获取 Public URL
-            # public_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(filename).rstrip('?')
+            # public_url = supabase.storage.from_(settings.supabase_bucket).get_public_url(filename).rstrip('?')
             # public_urls[f"{show}_{id}"] = public_url
             # logger.info(f"Generated public URL: {public_urls}")
             public_urls[f"{show}_{id}"] = filename

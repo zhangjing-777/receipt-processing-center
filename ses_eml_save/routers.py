@@ -18,14 +18,14 @@ async def ses_email_transfer(bucket, key, user_id):
     try:
         logger.info("Starting check and reset quato ...")
         quato_manager = QuotaManager(user_id, table="receipt_usage_quota_receipt_en")
-        quato_manager.check_and_reset()
+        await quato_manager.check_and_reset()
         logger.info("Check and reset quato successfully")
 
         status, success_count = await upload_to_supabase(bucket, key, user_id)
 
         logger.info("Starting update usage count ...")
         if success_count:
-            quato_manager.increment_usage(success_count)
+            await quato_manager.increment_usage(success_count)
             logger.info("Update usage count successfully")
         
         return status

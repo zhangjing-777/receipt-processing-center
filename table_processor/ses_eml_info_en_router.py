@@ -1,20 +1,14 @@
-from supabase import create_client, Client
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
-from dotenv import load_dotenv
 import logging
-import os
 
+from sqlalchemy import select, update, delete, and_
+from core.database import AsyncSessionLocal
+from core.models import SesEmlInfoEN
 from core.encryption import encrypt_data, decrypt_data
 
-
-load_dotenv()
-
-url: str = os.getenv("SUPABASE_URL") or ""
-key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
-supabase: Client = create_client(url, key)
 
 logger = logging.getLogger(__name__)
 
@@ -45,40 +39,56 @@ class DeleteEmlInfoRequest(BaseModel):
     user_id: str
     inds: List[int]
 
+
 # ----------- 查询接口 -----------
 @router.post("/get-eml-info")
 async def get_eml_info(request: GetEmlInfoRequest):
     """根据 user_id、ind、时间范围或分页查询 ses_eml_info_en 表"""
     try:
-        query = supabase.table("ses_eml_info_en").select("*").eq("user_id", request.user_id)
+        async with AsyncSessionLocal() as session:
+            query = select(SesEmlInfoEN).where(SesEmlInfoEN.user_id == request.user_id)
 
-        if request.ind:
-            query = query.eq("ind", request.ind)
-        elif request.start_time != "string" or request.end_time != "string":
-            if request.start_time != "string":
-                try:
-                    start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
-                    query = query.gte("create_time", start_dt.isoformat())
-                except ValueError:
-                    return {"error": "Invalid start_time format, expected YYYY-MM-DD", "status": "error"}
-            if request.end_time != "string":
-                try:
-                    end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
-                    end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-                    query = query.lte("create_time", end_dt.isoformat())
-                except ValueError:
-                    return {"error": "Invalid end_time format, expected YYYY-MM-DD", "status": "error"}
-            query = query.order("create_time", desc=True)
-        else:
-            query = query.order("create_time", desc=True).range(
-                request.offset, request.offset + request.limit - 1
-            )
+            if request.ind:
+                query = query.where(SesEmlInfoEN.ind == request.ind)
+            elif request.start_time != "string" or request.end_time != "string":
+                if request.start_time != "string":
+                    try:
+                        start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
+                        query = query.where(SesEmlInfoEN.create_time >= start_dt)
+                    except ValueError:
+                        return {"error": "Invalid start_time format, expected YYYY-MM-DD", "status": "error"}
+                if request.end_time != "string":
+                    try:
+                        end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
+                        end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                        query = query.where(SesEmlInfoEN.create_time <= end_dt)
+                    except ValueError:
+                        return {"error": "Invalid end_time format, expected YYYY-MM-DD", "status": "error"}
+                query = query.order_by(SesEmlInfoEN.create_time.desc())
+            else:
+                query = query.order_by(SesEmlInfoEN.create_time.desc()).offset(request.offset).limit(request.limit)
 
-        result = query.execute()
-        if not result.data:
+            result = await session.execute(query)
+            records = result.scalars().all()
+        
+        if not records:
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-        decrypted_result = [decrypt_data("ses_eml_info_en", record) for record in result.data]
+        decrypted_result = []
+        for record in records:
+            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+            if record_dict.get('invoice_date'):
+                record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
+            if record_dict.get('create_time'):
+                record_dict['create_time'] = record_dict['create_time'].isoformat()
+            if record_dict.get('id'):
+                record_dict['id'] = str(record_dict['id'])
+            if record_dict.get('user_id'):
+                record_dict['user_id'] = str(record_dict['user_id'])
+            
+            decrypted = decrypt_data("ses_eml_info_en", record_dict)
+            decrypted_result.append(decrypted)
+        
         return {"message": "Query success", "data": decrypted_result, "total": len(decrypted_result), "status": "success"}
 
     except Exception as e:
@@ -101,21 +111,37 @@ async def update_eml_info(request: UpdateEmlInfoRequest):
 
         encrypted_update_data = encrypt_data("ses_eml_info_en", update_data)
 
-        result = (
-            supabase.table("ses_eml_info_en")
-            .update(encrypted_update_data)
-            .eq("ind", request.ind)
-            .eq("user_id", request.user_id)
-            .execute()
-        )
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(SesEmlInfoEN)
+                .where(and_(SesEmlInfoEN.ind == request.ind, SesEmlInfoEN.user_id == request.user_id))
+                .values(**encrypted_update_data)
+                .returning(SesEmlInfoEN)
+            )
+            await session.commit()
+            updated_records = result.scalars().all()
 
-        if not result.data:
+        if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
-        decrypted_result = [decrypt_data("ses_eml_info_en", record) for record in result.data]
+        decrypted_result = []
+        for record in updated_records:
+            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+            if record_dict.get('invoice_date'):
+                record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
+            if record_dict.get('create_time'):
+                record_dict['create_time'] = record_dict['create_time'].isoformat()
+            if record_dict.get('id'):
+                record_dict['id'] = str(record_dict['id'])
+            if record_dict.get('user_id'):
+                record_dict['user_id'] = str(record_dict['user_id'])
+            
+            decrypted = decrypt_data("ses_eml_info_en", record_dict)
+            decrypted_result.append(decrypted)
+        
         return {
             "message": "Eml info updated successfully",
-            "updated_records": len(result.data),
+            "updated_records": len(decrypted_result),
             "data": decrypted_result,
             "status": "success"
         }
@@ -133,15 +159,16 @@ async def delete_eml_info(request: DeleteEmlInfoRequest):
         if not request.inds:
             return {"error": "inds list cannot be empty", "status": "error"}
 
-        result = (
-            supabase.table("ses_eml_info_en")
-            .delete()
-            .eq("user_id", request.user_id)
-            .in_("ind", request.inds)
-            .execute()
-        )
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                delete(SesEmlInfoEN)
+                .where(and_(SesEmlInfoEN.user_id == request.user_id, SesEmlInfoEN.ind.in_(request.inds)))
+                .returning(SesEmlInfoEN)
+            )
+            await session.commit()
+            deleted_data = result.scalars().all()
+            deleted_count = len(deleted_data)
 
-        deleted_count = len(result.data) if result.data else 0
         return {
             "message": "Records deleted successfully",
             "deleted_count": deleted_count,
