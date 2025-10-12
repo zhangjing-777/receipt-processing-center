@@ -27,7 +27,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(title="Receipt Processing API",             
+    version="2.1.1")
 
 # 添加CORS中间件
 app.add_middleware(
