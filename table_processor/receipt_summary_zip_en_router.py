@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
@@ -7,7 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from sqlalchemy import select, update, delete, and_
 from core.config import settings
 from core.database import AsyncSessionLocal
-from core.encryption import encrypt_data, decrypt_data
+from core.encryption import encrypt_data, decrypt_data, encrypt_value
 from core.upload_files import upload_files_to_supabase
 from core.models import ReceiptSummaryZipEN
 
@@ -39,6 +40,24 @@ class DeleteSummaryZipRequest(BaseModel):
     ids: List[int]
 
 
+# 并行解密和签名逻辑
+async def process_record(record_dict):
+    record_dict = dict(record_dict)
+
+    # 解密
+    decrypted = decrypt_data("receipt_summary_zip_en", record_dict)
+
+    # 生成签名URL（I/O操作）
+    if decrypted.get("download_url"):
+        try:
+            signed = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
+                decrypted["download_url"], expires_in=86400
+            )
+            decrypted["download_url"] = signed.get("signedURL", decrypted["download_url"])
+        except Exception as e:
+            logger.warning(f"Signed URL failed: {e}")
+    return decrypted
+    
 # ----------- 查询接口 -----------
 @router.post("/get-summary-zip")
 async def get_summary_zip(request: GetSummaryZipRequest):
@@ -70,34 +89,15 @@ async def get_summary_zip(request: GetSummaryZipRequest):
                 query = query.order_by(ReceiptSummaryZipEN.created_at.desc()).offset(request.offset).limit(request.limit)
 
             result = await session.execute(query)
-            records = result.scalars().all()
+            records = result.mappings().all()
 
-            if not records:
-                return {"message": "No records found", "data": [], "total": 0, "status": "success"}
+        if not records:
+            return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-            decrypted_result = []
-            for record in records:
-                record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-                if record_dict.get('created_at'):
-                    record_dict['created_at'] = record_dict['created_at'].isoformat()
-                if record_dict.get('user_id'):
-                    record_dict['user_id'] = str(record_dict['user_id'])
-                
-                decrypted = decrypt_data("receipt_summary_zip_en", record_dict)
-                
-                # 生成 signed URL
-                if decrypted.get("download_url"):
-                    try:
-                        signed_url_result = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
-                            decrypted["download_url"], expires_in=86400
-                        )
-                        decrypted["download_url"] = signed_url_result.get("signedURL", decrypted["download_url"])
-                    except Exception as e:
-                        logger.warning(f"Failed to generate signed URL for {decrypted['download_url']}: {e}")
-                
-                decrypted_result.append(decrypted)
+        # 并行执行解密 + 签名
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
 
-            return decrypted_result
+        return decrypted_result
 
     except Exception as e:
         logger.exception(f"Failed to retrieve summary zip: {str(e)}")
@@ -127,32 +127,13 @@ async def update_summary_zip(request: UpdateSummaryZipRequest):
                 .returning(ReceiptSummaryZipEN)
             )
             await session.commit()
-            updated_records = result.scalars().all()
+            updated_records = result.mappings().all()
 
         if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
-        decrypted_result = []
-        for record in updated_records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            if record_dict.get('created_at'):
-                record_dict['created_at'] = record_dict['created_at'].isoformat()
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted = decrypt_data("receipt_summary_zip_en", record_dict)
-            
-            # 生成 signed URL
-            if decrypted.get("download_url"):
-                try:
-                    signed_url_result = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
-                        decrypted["download_url"], expires_in=86400
-                    )
-                    decrypted["download_url"] = signed_url_result.get("signedURL", decrypted["download_url"])
-                except Exception as e:
-                    logger.warning(f"Failed to generate signed URL for {decrypted['download_url']}: {e}")
-            
-            decrypted_result.append(decrypted)
+        # 并行执行解密 + 签名
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
 
         return {
             "message": "Summary zip updated successfully",
@@ -196,7 +177,7 @@ async def update_summary_zip_download_url(
         storage_path = upload_files_to_supabase(user_id, [file], "summary")[file.filename]
 
         # 3. 加密新路径并更新表
-        encrypted_path = encrypt_data("receipt_summary_zip_en", {"download_url": storage_path})["download_url"]
+        encrypted_path = encrypt_value(storage_path)
 
         async with AsyncSessionLocal() as session:
             update_result = await session.execute(

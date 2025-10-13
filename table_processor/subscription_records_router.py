@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 import logging
+import asyncio
 
 from sqlalchemy import select, update, delete, and_, insert
 from core.database import AsyncSessionLocal
@@ -63,6 +64,10 @@ class DeleteRequest(BaseModel):
     inds: List[int]
 
 
+# 解密返回数据中的敏感字段
+async def process_record(record_dict):
+    record_dict = dict(record_dict)
+    return decrypt_data("subscription_records", record_dict)
 
 @router.post("/get-subscriptions")
 async def get_subscriptions(request: GetRequest):
@@ -92,33 +97,13 @@ async def get_subscriptions(request: GetRequest):
                 query = query.order_by(SubscriptionRecords.start_date.desc()).offset(request.offset).limit(request.limit)
             
             result = await session.execute(query)
-            records = result.scalars().all()
+            records = result.mappings().all()
         
         if not records:
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
         
-        # 解密敏感字段
-        decrypted_result = []
-        for record in records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            # 转换类型
-            if record_dict.get('start_date'):
-                record_dict['start_date'] = record_dict['start_date'].isoformat()
-            if record_dict.get('next_renewal_date'):
-                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
-            if record_dict.get('end_date'):
-                record_dict['end_date'] = record_dict['end_date'].isoformat()
-            if record_dict.get('created_at'):
-                record_dict['created_at'] = record_dict['created_at'].isoformat()
-            if record_dict.get('updated_at'):
-                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
-            if record_dict.get('id'):
-                record_dict['id'] = str(record_dict['id'])
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted = decrypt_data("subscription_records", record_dict)
-            decrypted_result.append(decrypted)
+        # 并行执行解密 
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
         
         logger.info(f"Found {len(decrypted_result)} subscription records")
         return  {"message": "Query success", "data": decrypted_result, "total": len(decrypted_result), "status": "success"}
@@ -145,7 +130,7 @@ async def get_subscription_stats(user_id: str, year: int = None) -> dict:
                 select(SubscriptionRecords)
                 .where(and_(SubscriptionRecords.user_id == user_id, SubscriptionRecords.status == "active"))
             )
-            records = result.scalars().all()
+            records = result.mappings().all()
 
         if not records:
             return {
@@ -158,27 +143,8 @@ async def get_subscription_stats(user_id: str, year: int = None) -> dict:
                 "by_billing_cycle": []
             }
 
-        subscriptions = []
-        for record in records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            # 转换类型
-            if record_dict.get('start_date'):
-                record_dict['start_date'] = record_dict['start_date'].isoformat()
-            if record_dict.get('next_renewal_date'):
-                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
-            if record_dict.get('end_date'):
-                record_dict['end_date'] = record_dict['end_date'].isoformat()
-            if record_dict.get('created_at'):
-                record_dict['created_at'] = record_dict['created_at'].isoformat()
-            if record_dict.get('updated_at'):
-                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
-            if record_dict.get('id'):
-                record_dict['id'] = str(record_dict['id'])
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted = decrypt_data("subscription_records", record_dict)
-            subscriptions.append(decrypted)
+        # 并行执行解密 
+        subscriptions = await asyncio.gather(*[process_record(r) for r in records])
 
         # === 📊 概览 ===
         total_active = len(subscriptions)
@@ -258,32 +224,13 @@ async def update_subscription(request: UpdateRequest):
                 .returning(SubscriptionRecords)
             )
             await session.commit()
-            updated_records = result.scalars().all()
+            updated_records = result.mappings().all()
 
         if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
-        decrypted_result = []
-        for record in updated_records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            # 转换类型
-            if record_dict.get('start_date'):
-                record_dict['start_date'] = record_dict['start_date'].isoformat()
-            if record_dict.get('next_renewal_date'):
-                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
-            if record_dict.get('end_date'):
-                record_dict['end_date'] = record_dict['end_date'].isoformat()
-            if record_dict.get('created_at'):
-                record_dict['created_at'] = record_dict['created_at'].isoformat()
-            if record_dict.get('updated_at'):
-                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
-            if record_dict.get('id'):
-                record_dict['id'] = str(record_dict['id'])
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted = decrypt_data("subscription_records", record_dict)
-            decrypted_result.append(decrypted)
+        # 并行执行解密 
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
         
         return {
             "message": "Subscription records updated successfully",
@@ -328,32 +275,13 @@ async def insert_subscription(request: InsertRequest):
                 insert(SubscriptionRecords).values([encrypted_data]).returning(SubscriptionRecords)
             )
             await session.commit()
-            inserted_records = result.scalars().all()
+            inserted_records = result.mappings().all()
 
         if not inserted_records:
             return {"message": "Insert failed", "status": "error"}
-
-        decrypted_result = []
-        for record in inserted_records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            # 转换类型
-            if record_dict.get('start_date'):
-                record_dict['start_date'] = record_dict['start_date'].isoformat()
-            if record_dict.get('next_renewal_date'):
-                record_dict['next_renewal_date'] = record_dict['next_renewal_date'].isoformat()
-            if record_dict.get('end_date'):
-                record_dict['end_date'] = record_dict['end_date'].isoformat()
-            if record_dict.get('created_at'):
-                record_dict['created_at'] = record_dict['created_at'].isoformat()
-            if record_dict.get('updated_at'):
-                record_dict['updated_at'] = record_dict['updated_at'].isoformat()
-            if record_dict.get('id'):
-                record_dict['id'] = str(record_dict['id'])
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted = decrypt_data("subscription_records", record_dict)
-            decrypted_result.append(decrypted)
+        
+        # 并行执行解密 
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in inserted_records])
         
         return {
             "message": "New subscription record inserted successfully",

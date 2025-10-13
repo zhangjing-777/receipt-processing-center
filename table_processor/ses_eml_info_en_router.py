@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 import logging
+import asyncio
 
 from sqlalchemy import select, update, delete, and_
 from core.database import AsyncSessionLocal
@@ -40,6 +41,11 @@ class DeleteEmlInfoRequest(BaseModel):
     inds: List[int]
 
 
+# 解密返回数据中的敏感字段
+async def process_record(record_dict):
+    record_dict = dict(record_dict)
+    return decrypt_data("ses_eml_info_en", record_dict)
+
 # ----------- 查询接口 -----------
 @router.post("/get-eml-info")
 async def get_eml_info(request: GetEmlInfoRequest):
@@ -69,25 +75,13 @@ async def get_eml_info(request: GetEmlInfoRequest):
                 query = query.order_by(SesEmlInfoEN.create_time.desc()).offset(request.offset).limit(request.limit)
 
             result = await session.execute(query)
-            records = result.scalars().all()
+            records = result.mappings().all()
         
         if not records:
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-        decrypted_result = []
-        for record in records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            if record_dict.get('invoice_date'):
-                record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
-            if record_dict.get('create_time'):
-                record_dict['create_time'] = record_dict['create_time'].isoformat()
-            if record_dict.get('id'):
-                record_dict['id'] = str(record_dict['id'])
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted = decrypt_data("ses_eml_info_en", record_dict)
-            decrypted_result.append(decrypted)
+        # 并行执行解密 
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
         
         return {"message": "Query success", "data": decrypted_result, "total": len(decrypted_result), "status": "success"}
 
@@ -119,25 +113,13 @@ async def update_eml_info(request: UpdateEmlInfoRequest):
                 .returning(SesEmlInfoEN)
             )
             await session.commit()
-            updated_records = result.scalars().all()
+            updated_records = result.mappings().all()
 
         if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
-        decrypted_result = []
-        for record in updated_records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            if record_dict.get('invoice_date'):
-                record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
-            if record_dict.get('create_time'):
-                record_dict['create_time'] = record_dict['create_time'].isoformat()
-            if record_dict.get('id'):
-                record_dict['id'] = str(record_dict['id'])
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted = decrypt_data("ses_eml_info_en", record_dict)
-            decrypted_result.append(decrypted)
+        # 并行执行解密 
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
         
         return {
             "message": "Eml info updated successfully",

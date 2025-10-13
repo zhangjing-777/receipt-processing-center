@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
@@ -99,39 +100,32 @@ async def get_receipt(request: GetReceiptRequest):
             
             logger.info(f"query is {query}")
             result = await session.execute(query)
-            records = result.scalars().all()
+            records = result.mappings().all() 
 
-            if not records:
-                return {"message": "No records found", "data": [], "total": 0, "status": "success"}
+        if not records:
+            return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-            decrypted_result = []
-            for record in records:
-                record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-                # 转换日期和时间戳为字符串
-                if record_dict.get('invoice_date'):
-                    record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
-                if record_dict.get('create_time'):
-                    record_dict['create_time'] = record_dict['create_time'].isoformat()
-                if record_dict.get('id'):
-                    record_dict['id'] = str(record_dict['id'])
-                if record_dict.get('user_id'):
-                    record_dict['user_id'] = str(record_dict['user_id'])
-                
-                decrypted = decrypt_data("receipt_items_en", record_dict)
-                
-                # 生成 signed URL
-                if decrypted.get("file_url"):
-                    try:
-                        signed_url_result = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
-                            decrypted["file_url"], expires_in=86400
-                        )
-                        decrypted["file_url"] = signed_url_result.get("signedURL", decrypted["file_url"])
-                    except Exception as e:
-                        logger.warning(f"Failed to generate signed URL for {decrypted['file_url']}: {e}")
-                
-                decrypted_result.append(decrypted)
+        # 并行解密和签名逻辑
+        async def process_record(record_dict):
+            record_dict = dict(record_dict)
+            # 解密
+            decrypted = decrypt_data("receipt_items_en", record_dict)
 
-            return decrypted_result
+            # 生成签名URL（I/O操作）
+            if decrypted.get("file_url"):
+                try:
+                    signed = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
+                        decrypted["file_url"], expires_in=86400
+                    )
+                    decrypted["file_url"] = signed.get("signedURL", decrypted["file_url"])
+                except Exception as e:
+                    logger.warning(f"Signed URL failed: {e}")
+            return decrypted
+
+        # 并行执行解密 + 签名
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
+
+        return decrypted_result
 
     except Exception as e:
         logger.exception(f"Failed to retrieve receipts: {str(e)}")
@@ -168,28 +162,19 @@ async def update_receipt(request: UpdateReceiptRequest):
                 .returning(ReceiptItemsEN)
             )
             await session.commit()
-            updated_records = result.scalars().all()
+            updated_records = result.mappings().all() 
         
         if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
         
         # 解密返回数据中的敏感字段
-        decrypted_result = []
-        for record in updated_records:
-            record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-            # 转换类型
-            if record_dict.get('invoice_date'):
-                record_dict['invoice_date'] = record_dict['invoice_date'].isoformat()
-            if record_dict.get('create_time'):
-                record_dict['create_time'] = record_dict['create_time'].isoformat()
-            if record_dict.get('id'):
-                record_dict['id'] = str(record_dict['id'])
-            if record_dict.get('user_id'):
-                record_dict['user_id'] = str(record_dict['user_id'])
-            
-            decrypted_record = decrypt_data("receipt_items_en", record_dict)
-            decrypted_result.append(decrypted_record)
-        
+        async def process_record(record_dict):
+            record_dict = dict(record_dict)
+            return decrypt_data("receipt_items_en", record_dict)
+
+        # 并行执行解密 
+        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
+       
         logger.info(f"Successfully updated {len(updated_records)} record(s)")
         return {
             "message": "Receipt information updated successfully", 

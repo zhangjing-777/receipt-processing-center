@@ -59,17 +59,12 @@ async def get_upload_result(request: GetUploadResultRequest):
                 query = query.order_by(ReceiptItemsENUploadResult.created_at.desc()).offset(request.offset).limit(request.limit)
 
             result = await session.execute(query)
-            records = result.scalars().all()
+            records = result.mappings().all()
             
-            if not records:
-                return {"message": "No records found", "data": [], "total": 0, "status": "success"}
+        if not records:
+            return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-            result_data = []
-            for record in records:
-                record_dict = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-                result_data.append(record_dict)
-
-            return {"message": "Query success", "data": result_data, "total": len(result_data), "status": "success"}
+        return {"message": "Query success", "data": records, "total": len(records), "status": "success"}
 
     except Exception as e:
         logger.exception(f"Failed to retrieve upload results: {str(e)}")
