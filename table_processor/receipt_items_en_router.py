@@ -3,16 +3,20 @@ import asyncio
 from typing import Optional, List
 from pydantic import BaseModel, Field
 from supabase import create_client, Client
-from datetime import datetime
+from datetime import datetime, timedelta
+import calendar
+from asyncpg.pgproto.pgproto import UUID as AsyncpgUUID
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from sqlalchemy import select, update, delete, and_
+from concurrent.futures import ThreadPoolExecutor
 from core.database import AsyncSessionLocal
 from core.config import settings
 from core.models import ReceiptItemsEN, SesEmlInfoEN
 from core.encryption import encrypt_data, decrypt_data
 from core.upload_files import upload_files_to_supabase
+from table_processor.utils import process_record
 
-
+executor = ThreadPoolExecutor(max_workers=8)
 supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 logger = logging.getLogger(__name__)
@@ -24,7 +28,9 @@ class GetReceiptRequest(BaseModel):
     ind: Optional[int] = None  # 精确查询
     start_time: Optional[str] = None  # YYYY-MM-DD
     end_time: Optional[str] = None    # YYYY-MM-DD
-    limit: Optional[int] = 10
+    year: Optional[int] = None        # 查询年份
+    month: Optional[int] = None       # 查询月份
+    limit: Optional[int] = 0
     offset: Optional[int] = 0
 
 class UpdateReceiptRequest(BaseModel):
@@ -54,82 +60,95 @@ async def get_receipt(request: GetReceiptRequest):
     """
     根据 user_id 和条件查询收据信息:
     1. ind 精确查询
-    2. create_time 时间范围 (YYYY-MM-DD → timestamptz 范围)
-    3. limit+offset 分页查询
+    2. year + month 按月查询 invoice_date
+    3. create_time 时间范围 (YYYY-MM-DD → timestamptz 范围)
+    4. limit+offset 分页查询
+    默认查询“上个月invoice_date”的所有记录
     """
     logger.info(
         f"Querying receipts for user_id: {request.user_id}, "
         f"ind: {request.ind}, start_time: {request.start_time}, end_time: {request.end_time}, "
-        f"limit: {request.limit}, offset: {request.offset}"
+        f"year: {request.year}, month: {request.month}, limit: {request.limit}, offset: {request.offset}"
     )
 
     try:
         async with AsyncSessionLocal() as session:
-            query = select(ReceiptItemsEN).where(ReceiptItemsEN.user_id == request.user_id)
+            query = select(
+                ReceiptItemsEN.ind,
+                ReceiptItemsEN.id,
+                ReceiptItemsEN.user_id,
+                ReceiptItemsEN.category,
+                ReceiptItemsEN.buyer,
+                ReceiptItemsEN.seller,
+                ReceiptItemsEN.invoice_date,
+                ReceiptItemsEN.invoice_total,
+                ReceiptItemsEN.currency,
+                ReceiptItemsEN.file_url,
+                ReceiptItemsEN.address
+            ).where(ReceiptItemsEN.user_id == request.user_id)
 
+            # ① 精确查询优先
             if request.ind:
-                # ① 精确查询
                 query = query.where(ReceiptItemsEN.ind == request.ind)
                 logger.info(f"Exact query for record id: {request.ind}")
 
-            elif request.start_time != "string" or request.end_time != "string":
-                # ② 时间范围查询
-                if request.start_time != "string":
-                    try:
-                        start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
-                        query = query.where(ReceiptItemsEN.create_time >= start_dt)
-                    except ValueError:
-                        return {"error": "Invalid start_time format, expected YYYY-MM-DD", "status": "error"}
+            # ② 年月查询（优先级高于 start/end）
+            elif request.year and request.month:               
+                year, month = request.year, request.month
+                start_dt = datetime(year, month, 1)
+                _, last_day = calendar.monthrange(year, month)
+                end_dt = datetime(year, month, last_day, 23, 59, 59, 999999)
+                query = query.where(
+                    ReceiptItemsEN.invoice_date >= start_dt,
+                    ReceiptItemsEN.invoice_date <= end_dt
+                )
+                logger.info(f"Monthly query: {year}-{month:02d}")
 
-                if request.end_time != "string":
-                    try:
-                        end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
-                        # 包含当天 → 设置为当天的最后一秒
-                        end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-                        query = query.where(ReceiptItemsEN.create_time <= end_dt)
-                    except ValueError:
-                        return {"error": "Invalid end_time format, expected YYYY-MM-DD", "status": "error"}
+            # ③ 普通时间范围查询
+            elif request.start_time != "string" and request.end_time != "string":
+                start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
+                end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
+                end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                query = query.where(ReceiptItemsEN.create_time >= start_dt,
+                                    ReceiptItemsEN.create_time <= end_dt)
 
-                query = query.order_by(ReceiptItemsEN.create_time.desc())
-                logger.info(f"Time range query: {request.start_time} - {request.end_time}")
+                logger.info(f"Custom range query: {request.start_time} - {request.end_time}")
 
+            # 排序 + 分页
+            elif request.offset and request.limit:               
+                query = query.order_by(ReceiptItemsEN.invoice_date.desc()).offset(request.offset).limit(request.limit)
+
+            # ④ 默认查询上个月
             else:
-                # ③ 分页查询
-                query = query.order_by(ReceiptItemsEN.create_time.desc()).offset(request.offset).limit(request.limit)
-                logger.info(f"Paginated query with limit: {request.limit}, offset: {request.offset}")
-            
-            logger.info(f"query is {query}")
+                today = datetime.utcnow()
+                first_of_this_month = datetime(today.year, today.month, 1)
+                last_month_end = first_of_this_month - timedelta(seconds=1)
+                last_month_start = datetime(last_month_end.year, last_month_end.month, 1)
+                query = query.where(
+                    ReceiptItemsEN.invoice_date >= last_month_start,
+                    ReceiptItemsEN.invoice_date <= last_month_end
+                )
+                logger.info(f"Default: query last month ({last_month_start.date()} ~ {last_month_end.date()})")
+
+
+            logger.info(f"Final SQL: {query}")
             result = await session.execute(query)
-            records = result.mappings().all() 
+            records = result.mappings().all()
 
         if not records:
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-        # 并行解密和签名逻辑
-        async def process_record(record_dict):
-            record_dict = dict(record_dict)
-            # 解密
-            decrypted = decrypt_data("receipt_items_en", record_dict)
-
-            # 生成签名URL（I/O操作）
-            if decrypted.get("file_url"):
-                try:
-                    signed = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
-                        decrypted["file_url"], expires_in=86400
-                    )
-                    decrypted["file_url"] = signed.get("signedURL", decrypted["file_url"])
-                except Exception as e:
-                    logger.warning(f"Signed URL failed: {e}")
-            return decrypted
-
         # 并行执行解密 + 签名
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
+        decrypted_result = await asyncio.gather(
+            *[process_record(r, "receipt_items_en", "file_url") for r in records]
+        )
 
         return decrypted_result
 
     except Exception as e:
         logger.exception(f"Failed to retrieve receipts: {str(e)}")
         return {"error": f"Failed to retrieve receipts: {str(e)}", "status": "error"}
+
 
 @router.post("/update-receipt-items")
 async def update_receipt(request: UpdateReceiptRequest):
@@ -166,14 +185,9 @@ async def update_receipt(request: UpdateReceiptRequest):
         
         if not updated_records:
             return {"error": "No matching record found or no permission to update", "status": "error"}
-        
-        # 解密返回数据中的敏感字段
-        async def process_record(record_dict):
-            record_dict = dict(record_dict)
-            return decrypt_data("receipt_items_en", record_dict)
 
         # 并行执行解密 
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "receipt_items_en") for r in updated_records])
        
         logger.info(f"Successfully updated {len(updated_records)} record(s)")
         return {

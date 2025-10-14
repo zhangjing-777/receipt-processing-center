@@ -16,3 +16,4 @@ asyncpg
 sqlalchemy[asyncio]
 alembic
 pydantic-settings
+redis[asyncio]

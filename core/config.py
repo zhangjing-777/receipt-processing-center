@@ -26,9 +26,13 @@ class Settings(BaseSettings):
     deepseek_api_key: str
     deepseek_url: str
   
-    # 其他配置
     encryption_key: str
     
+    redis_host: str
+    redis_port: str
+    redis_password: str
+    redis_db: str
+
     class Config:
         env_file = ".env"
     

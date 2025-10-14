@@ -9,6 +9,7 @@ from sqlalchemy import select, update, delete, and_
 from core.database import AsyncSessionLocal
 from core.models import SesEmlInfoEN
 from core.encryption import encrypt_data, decrypt_data
+from table_processor.utils import process_record
 
 
 logger = logging.getLogger(__name__)
@@ -40,11 +41,6 @@ class DeleteEmlInfoRequest(BaseModel):
     user_id: str
     inds: List[int]
 
-
-# 解密返回数据中的敏感字段
-async def process_record(record_dict):
-    record_dict = dict(record_dict)
-    return decrypt_data("ses_eml_info_en", record_dict)
 
 # ----------- 查询接口 -----------
 @router.post("/get-eml-info")
@@ -81,7 +77,7 @@ async def get_eml_info(request: GetEmlInfoRequest):
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
         # 并行执行解密 
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "ses_eml_info_en") for r in records])
         
         return {"message": "Query success", "data": decrypted_result, "total": len(decrypted_result), "status": "success"}
 
@@ -119,7 +115,7 @@ async def update_eml_info(request: UpdateEmlInfoRequest):
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
         # 并行执行解密 
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "ses_eml_info_en") for r in updated_records])
         
         return {
             "message": "Eml info updated successfully",

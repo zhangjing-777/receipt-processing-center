@@ -71,8 +71,8 @@ class ReceiptDataPreparer:
             data = {
                 "id": RECORD_ID,
                 "user_id": self.user_id,
-                "from": self.raw_attachments.get("from_email", ""),
-                "to": self.raw_attachments.get("to_email", ""),
+                "from_email": self.raw_attachments.get("from_email", ""),
+                "to_email": self.raw_attachments.get("to_email", ""),
                 "s3_eml_url": s3_eml_url,
                 "buyer": self.items.get("buyer", ""),
                 "seller": self.items.get("seller", ""),

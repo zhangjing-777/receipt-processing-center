@@ -3,11 +3,12 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 import logging
-
+import asyncio
 from sqlalchemy import select, delete
 from core.config import settings
 from core.database import AsyncSessionLocal
 from core.models import ReceiptItemsENUploadResult
+from table_processor.utils import process_record
 
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,8 @@ async def get_upload_result(request: GetUploadResultRequest):
         if not records:
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
+        records = await asyncio.gather(*[process_record(r) for r in records])
+        
         return {"message": "Query success", "data": records, "total": len(records), "status": "success"}
 
     except Exception as e:

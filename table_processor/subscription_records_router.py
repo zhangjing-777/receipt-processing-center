@@ -4,11 +4,12 @@ from typing import Optional, List
 from datetime import datetime
 import logging
 import asyncio
-
+import calendar
 from sqlalchemy import select, update, delete, and_, insert
 from core.database import AsyncSessionLocal
 from core.models import SubscriptionRecords
-from core.encryption import encrypt_data, decrypt_data
+from core.encryption import encrypt_data
+from table_processor.utils import process_record
 
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,10 @@ class GetRequest(BaseModel):
     status: Optional[str] = None
     start_date: Optional[str] = None  # YYYY-MM-DD
     end_date: Optional[str] = None    # YYYY-MM-DD
-    limit: Optional[int] = 10
+    limit: Optional[int] = 0
     offset: Optional[int] = 0
+    year: Optional[int] = None        # 查询年份
+    month: Optional[int] = None       # 查询月份
 
 class UpdateRequest(BaseModel):
     ind: int = Field(..., description="记录唯一标识")
@@ -64,11 +67,6 @@ class DeleteRequest(BaseModel):
     inds: List[int]
 
 
-# 解密返回数据中的敏感字段
-async def process_record(record_dict):
-    record_dict = dict(record_dict)
-    return decrypt_data("subscription_records", record_dict)
-
 @router.post("/get-subscriptions")
 async def get_subscriptions(request: GetRequest):
     """
@@ -93,9 +91,31 @@ async def get_subscriptions(request: GetRequest):
                 end_dt = datetime.strptime(request.end_date, "%Y-%m-%d").date()
                 query = query.where(SubscriptionRecords.start_date <= end_dt)
             
-            else:
+            elif request.offset and request.limit:
                 query = query.order_by(SubscriptionRecords.start_date.desc()).offset(request.offset).limit(request.limit)
             
+            elif request.year and request.month:               
+                year, month = request.year, request.month
+                start_dt = datetime(year, month, 1)
+                _, last_day = calendar.monthrange(year, month)
+                end_dt = datetime(year, month, last_day, 23, 59, 59, 999999)
+                query = query.where(
+                    SubscriptionRecords.start_date >= start_dt,
+                    SubscriptionRecords.start_date <= end_dt
+                )
+                logger.info(f"Monthly query: {year}-{month:02d}")
+
+            else:
+                now = datetime.utcnow()
+                start_of_year = datetime(now.year, 1, 1)
+                end_of_year = datetime(now.year, 12, 31, 23, 59, 59, 999999)
+                query = query.where(
+                    SubscriptionRecords.start_date >= start_of_year,
+                    SubscriptionRecords.start_date <= end_of_year
+                )
+                logger.info(f"Default: query current year ({start_of_year.date()} ~ {end_of_year.date()})")
+
+            query = query.order_by(SubscriptionRecords.start_date.desc())
             result = await session.execute(query)
             records = result.mappings().all()
         
@@ -103,7 +123,7 @@ async def get_subscriptions(request: GetRequest):
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
         
         # 并行执行解密 
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "subscription_records") for r in records])
         
         logger.info(f"Found {len(decrypted_result)} subscription records")
         return  {"message": "Query success", "data": decrypted_result, "total": len(decrypted_result), "status": "success"}
@@ -144,7 +164,7 @@ async def get_subscription_stats(user_id: str, year: int = None) -> dict:
             }
 
         # 并行执行解密 
-        subscriptions = await asyncio.gather(*[process_record(r) for r in records])
+        subscriptions = await asyncio.gather(*[process_record(r, "subscription_records") for r in records])
 
         # === 📊 概览 ===
         total_active = len(subscriptions)
@@ -230,7 +250,7 @@ async def update_subscription(request: UpdateRequest):
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
         # 并行执行解密 
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "subscription_records") for r in updated_records])
         
         return {
             "message": "Subscription records updated successfully",
@@ -281,7 +301,7 @@ async def insert_subscription(request: InsertRequest):
             return {"message": "Insert failed", "status": "error"}
         
         # 并行执行解密 
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in inserted_records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "subscription_records") for r in inserted_records])
         
         return {
             "message": "New subscription record inserted successfully",

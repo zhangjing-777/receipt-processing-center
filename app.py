@@ -3,6 +3,8 @@ import logging
 from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from core.redis_client import redis_client
 from ses_eml_save.routers import router as ses_eml_save_routers
 from rcpdro_web_save.routers import router as rcpdro_web_save_routers
 from summary_download.routers import router as summary_download_routers
@@ -39,6 +41,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+async def startup_event():
+    try:
+        pong = await redis_client.ping()
+        if pong:
+            logger.info("✅ Redis connected successfully")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis connection failed: {e}")
+
 # 包含路由
 app.include_router(ses_eml_save_routers)
 app.include_router(rcpdro_web_save_routers)
@@ -55,9 +66,15 @@ async def health_check():
     logger.info("Health check requested")
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
-
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """全局异常处理器"""
     logger.exception(f"Unhandled exception occurred: {str(exc)}")
-    return {"error": "Internal server error", "status": "error"}
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "status": "error"}
+    )
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await redis_client.close()
+    print("🧹 Redis connection closed")

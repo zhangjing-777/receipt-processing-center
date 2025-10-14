@@ -11,6 +11,7 @@ from core.database import AsyncSessionLocal
 from core.encryption import encrypt_data, decrypt_data, encrypt_value
 from core.upload_files import upload_files_to_supabase
 from core.models import ReceiptSummaryZipEN
+from table_processor.utils import process_record
 
 
 supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
@@ -38,25 +39,6 @@ class UpdateSummaryZipRequest(BaseModel):
 class DeleteSummaryZipRequest(BaseModel):
     user_id: str
     ids: List[int]
-
-
-# 并行解密和签名逻辑
-async def process_record(record_dict):
-    record_dict = dict(record_dict)
-
-    # 解密
-    decrypted = decrypt_data("receipt_summary_zip_en", record_dict)
-
-    # 生成签名URL（I/O操作）
-    if decrypted.get("download_url"):
-        try:
-            signed = supabase.storage.from_(settings.supabase_bucket).create_signed_url(
-                decrypted["download_url"], expires_in=86400
-            )
-            decrypted["download_url"] = signed.get("signedURL", decrypted["download_url"])
-        except Exception as e:
-            logger.warning(f"Signed URL failed: {e}")
-    return decrypted
     
 # ----------- 查询接口 -----------
 @router.post("/get-summary-zip")
@@ -95,7 +77,7 @@ async def get_summary_zip(request: GetSummaryZipRequest):
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
         # 并行执行解密 + 签名
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "receipt_summary_zip_en", "download_url") for r in records])
 
         return decrypted_result
 
@@ -133,7 +115,7 @@ async def update_summary_zip(request: UpdateSummaryZipRequest):
             return {"error": "No matching record found or no permission to update", "status": "error"}
 
         # 并行执行解密 + 签名
-        decrypted_result = await asyncio.gather(*[process_record(r) for r in updated_records])
+        decrypted_result = await asyncio.gather(*[process_record(r, "receipt_summary_zip_en", "download_url") for r in updated_records])
 
         return {
             "message": "Summary zip updated successfully",
