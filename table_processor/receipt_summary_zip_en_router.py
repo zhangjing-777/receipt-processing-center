@@ -52,21 +52,12 @@ async def get_summary_zip(request: GetSummaryZipRequest):
 
             if request.id:
                 query = query.where(ReceiptSummaryZipEN.id == request.id)
-            elif request.start_time != "string" or request.end_time != "string":
-                if request.start_time != "string":
-                    try:
-                        start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
-                        query = query.where(ReceiptSummaryZipEN.created_at >= start_dt)
-                    except ValueError:
-                        return {"error": "Invalid start_time format, expected YYYY-MM-DD", "status": "error"}
-                if request.end_time != "string":
-                    try:
-                        end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
-                        end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-                        query = query.where(ReceiptSummaryZipEN.created_at <= end_dt)
-                    except ValueError:
-                        return {"error": "Invalid end_time format, expected YYYY-MM-DD", "status": "error"}
-                query = query.order_by(ReceiptSummaryZipEN.created_at.desc())
+            elif request.start_time != "string" and request.end_time != "string":
+                start_dt = datetime.strptime(request.start_time, "%Y-%m-%d").date()
+                end_dt = datetime.strptime(request.end_time, "%Y-%m-%d").date()
+                query = query.where(ReceiptSummaryZipEN.created_at >= start_dt,
+                                    ReceiptSummaryZipEN.created_at <= end_dt
+                                    ).order_by(ReceiptSummaryZipEN.created_at.desc())
             else:
                 query = query.order_by(ReceiptSummaryZipEN.created_at.desc()).offset(request.offset).limit(request.limit)
 

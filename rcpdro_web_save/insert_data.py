@@ -114,6 +114,7 @@ class SubscriptDataPreparer:
             data = {
                 "id": RECORD_ID,
                 "user_id": self.user_id,
+                "buyer_name": self.fields.get("buyer_name", ""),
                 "seller_name": self.fields.get("seller_name", ""),
                 "plan_name": self.fields.get("plan_name", ""),
                 "billing_cycle": self.fields.get("billing_cycle", "monthly"),

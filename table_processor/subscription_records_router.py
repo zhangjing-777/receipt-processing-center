@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import asyncio
 import calendar
@@ -18,6 +18,10 @@ router = APIRouter(prefix="/subscription-records", tags=["subscription_records�
 
 class GetRequest(BaseModel):
     user_id: str  # 必填
+    status: Optional[str] = Field(default=None, description="订阅状态：active / upcoming / expired")
+
+class GetRawRequest(BaseModel):
+    user_id: str  # 必填
     ind: Optional[int] = None  # 精确查询
     status: Optional[str] = None
     start_date: Optional[str] = None  # YYYY-MM-DD
@@ -32,6 +36,7 @@ class UpdateRequest(BaseModel):
     user_id: str = Field(..., description="用户ID")
 
     id: Optional[str] = Field(default=None, description="对应到receipt_items_en表的id字段")
+    buyer_name: Optional[str] = Field(default=None, description="订阅人名称")
     seller_name: Optional[str] = Field(default=None, description="服务商名称，例如：OpenAI, Notion, Cursor 等")
     plan_name: Optional[str] = Field(default=None, description="订阅套餐名称，例如：Pro Plan, Business Plan 等")
     billing_cycle: Optional[str] = Field(default=None, description="计费周期：monthly, quarterly, yearly, one-time")
@@ -40,7 +45,7 @@ class UpdateRequest(BaseModel):
     start_date: Optional[str] = Field(default=None, description="订阅开始日期，格式 YYYY-MM-DD")
     next_renewal_date: Optional[str] = Field(default=None, description="下次续费日期，格式 YYYY-MM-DD")
     end_date: Optional[str] = Field(default=None, description="订阅结束日期，格式 YYYY-MM-DD")
-    status: Optional[str] = Field(default=None, description="订阅状态：active, expiring, expired")
+    status: Optional[str] = Field(default=None, description="订阅状态：active, upcaming, expired")
     source: Optional[str] = Field(default=None, description="订阅来源，例如：web, email")
     note: Optional[str] = Field(default=None, description="备注或系统识别说明")
 
@@ -49,6 +54,7 @@ class InsertRequest(BaseModel):
     user_id: str = Field(..., description="用户ID")
 
     id: Optional[str] = Field(default=None, description="对应到receipt_items_en表的id字段")
+    buyer_name: Optional[str] = Field(default=None, description="订阅人名称")
     seller_name: Optional[str] = Field(default=None, description="服务商名称，例如：OpenAI, Notion, Cursor 等")
     plan_name: Optional[str] = Field(default=None, description="订阅套餐名称，例如：Pro Plan, Business Plan 等")
     billing_cycle: Optional[str] = Field(default=None, description="计费周期：monthly, quarterly, yearly, one-time")
@@ -69,6 +75,150 @@ class DeleteRequest(BaseModel):
 
 @router.post("/get-subscriptions")
 async def get_subscriptions(request: GetRequest):
+    """
+    查询订阅记录（支持多期续订识别）：
+    - 每个 (user_id, buyer_name, seller_name, plan_name, currency, amount) 视为同一订阅链
+    - 连续周期 (start_date - prev_end <= 3天) 视为续期
+    - 仅保留每个订阅链的最新一期
+    - status = 'active' → 当前生效中
+    - status = 'upcoming' → 7天内到期
+    - status = 'expired' → 已过期
+    自动计算剩余天数(days_left)、过期天数(days_expired)
+    """
+    logger.info(f"Querying subscriptions for user: {request.user_id}")
+
+    try:
+        async with AsyncSessionLocal() as session:
+            today = datetime.utcnow().date()
+
+            # ✅ Step 1: 取出当前用户的所有订阅
+            base_query = select(SubscriptionRecords).where(
+                SubscriptionRecords.user_id == request.user_id
+            ).order_by(
+                SubscriptionRecords.seller_name,
+                SubscriptionRecords.buyer_name,
+                SubscriptionRecords.plan_name,
+                SubscriptionRecords.currency,
+                SubscriptionRecords.amount,
+                SubscriptionRecords.start_date.asc()
+            )
+
+            result = await session.execute(base_query)
+            records = result.mappings().all()
+
+        if not records:
+            return {"message": "No records found", "data": [], "total": 0, "status": "success"}
+
+        # ✅ Step 2: 解密 + 排序
+        decrypted_result = await asyncio.gather(
+            *[process_record(r, "subscription_records") for r in records]
+        )
+
+        decrypted_result.sort(
+            key=lambda r: (
+                r.get("buyer_name", ""),
+                r.get("seller_name", ""),
+                r.get("plan_name", ""),
+                r.get("currency", ""),
+                r.get("amount", 0),
+                r.get("start_date", "")
+            )
+        )
+
+        # ✅ Step 3: 周期连续性检查 + 聚类（识别订阅链）
+        chains = []
+        prev_key = None
+        prev_end = None
+        current_chain = []
+
+        for r in decrypted_result:
+            # 解析日期
+            start_date = r.get("start_date")
+            end_date = r.get("end_date")
+            if isinstance(start_date, str):
+                start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+            if isinstance(end_date, str):
+                end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+            # 唯一订阅键
+            key = (
+                r.get("user_id"),
+                r.get("buyer_name", ""),
+                r.get("seller_name", ""),
+                r.get("plan_name", ""),
+                r.get("currency", ""),
+                float(r.get("amount", 0))
+            )
+
+            # 判断是否与上一条属于同一链
+            if key == prev_key and prev_end and (start_date - prev_end).days <= 3:
+                # 同一订阅链的续期
+                current_chain.append(r)
+            else:
+                # 开启新链
+                if current_chain:
+                    chains.append(current_chain)
+                current_chain = [r]
+            prev_end = end_date
+            prev_key = key
+
+        if current_chain:
+            chains.append(current_chain)
+
+        # ✅ Step 4: 对每个链取最新一期
+        latest_records = [chain[-1] for chain in chains]
+
+        # ✅ Step 5: 计算剩余天数、状态（active / upcoming / expired）
+        enriched_result = []
+        for record in latest_records:
+            start_date = record.get("start_date")
+            end_date = record.get("end_date")
+
+            if isinstance(start_date, str):
+                start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+            if isinstance(end_date, str):
+                end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+            days_left = max((end_date - today).days, 0)
+            days_expired = max((today - end_date).days, 0)
+
+            if end_date < today:
+                status_label = "expired"
+            elif end_date <= today + timedelta(days=7):
+                status_label = "upcoming"
+            else:
+                status_label = "active"
+
+            record.update({
+                "days_left": days_left,
+                "days_expired": days_expired,
+                "status_label": status_label
+            })
+            enriched_result.append(record)
+
+        # ✅ Step 6: 按用户请求筛选状态
+        if request.status and request.status != "string":
+            view = request.status.lower()
+            enriched_result = [
+                r for r in enriched_result if r.get("status_label") == view
+            ]
+            logger.info(f"Filtered by status: {view}, count={len(enriched_result)}")
+
+        logger.info(f"Found {len(enriched_result)} latest subscription records (deduped)")
+        return {
+            "message": "Query success",
+            "data": enriched_result,
+            "total": len(enriched_result),
+            "status": "success"
+        }
+
+    except Exception as e:
+        logger.exception(f"Failed to query subscriptions: {str(e)}")
+        raise
+
+
+@router.post("/get-raw-subscriptions")
+async def get_raw_subscriptions(request: GetRawRequest):
     """
     查询订阅记录
     """

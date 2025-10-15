@@ -120,6 +120,7 @@ If it is a subscription invoice, **extract the following fields** and infer miss
   "is_subscription": true,
   "subscription_fields": {{
     "seller_name": "service provider name",
+    "buyer_name": "service buyer name",
     "plan_name": "plan/subscription name",
     "billing_cycle": "monthly/quarterly/yearly/one-time",
     "amount": numeric_value,
@@ -162,46 +163,6 @@ If no billing_cycle is mentioned but the text contains words like "for September
 - Do NOT include explanations or additional text.
 
 ---
-
-OCR text:
-{ocr_text}
-"""
-
-    
-    
-    
-    pro2 = f"""Analyze this OCR text from an invoice and determine if it's a subscription/recurring payment invoice.
-
-A subscription invoice typically includes:
-- Recurring payment terms (monthly, quarterly, yearly)
-- Service/SaaS providers (like Netflix, Spotify, Claude, AWS, Adobe, etc.)
-- Words like: subscription, renewal, auto-renew, membership, recurring, billing cycle
-- Future billing dates
-
-If this IS a subscription invoice, extract these fields as JSON:
-{{
-  "is_subscription": true,
-  "subscription_fields": {{
-    "seller_name": "service provider name",
-    "plan_name": "plan/subscription name",
-    "billing_cycle": "monthly/quarterly/yearly/one-time",
-    "amount": numeric_value,
-    "currency": "USD/EUR/CNY",
-    "start_date": "YYYY-MM-DD or null",
-    "next_renewal_date": "YYYY-MM-DD or null",
-    "end_date": "YYYY-MM-DD or null",
-    "invoice_number": "string or null",
-    "note": "any important info"
-  }}
-}}
-
-If this is NOT a subscription invoice (regular one-time purchase, meal receipt, taxi, hotel, etc.), return:
-{{
-  "is_subscription": false,
-  "subscription_fields": null
-}}
-
-Return ONLY valid JSON, no explanation.
 
 OCR text:
 {ocr_text}

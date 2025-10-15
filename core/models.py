@@ -99,6 +99,7 @@ class SubscriptionRecords(Base):
     ind = Column(BigInteger, primary_key=True, autoincrement=True)
     id = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, nullable=False)
     user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    buyer_name = Column(Text)
     seller_name = Column(Text)
     plan_name = Column(Text)
     billing_cycle = Column(Text)
