@@ -1,6 +1,7 @@
 import os
 import uuid
 import logging
+from html import escape
 from datetime import datetime
 from supabase import create_client, Client
 from playwright.async_api import async_playwright
@@ -21,13 +22,32 @@ async def render_html_string_to_image_and_upload(html_string: str, user_id:str, 
     logger.info(f"Generated temporary image filename: {image_file}")
 
     try:
+        html_safe = f"""
+        <html>
+        <head>
+        <style>
+        body {{
+          background: #fff;
+          color: #000;
+          white-space: pre-wrap;
+          font-family: 'Courier New', monospace;
+          font-size: 14px;
+          line-height: 1.4;
+          padding: 20px;
+        }}
+        </style>
+        </head>
+        <body><pre>{escape(html_string)}</pre></body>
+        </html>
+        """
+
         # 用 Playwright 渲染 HTML 字符串
         logger.info("Launching Playwright browser for HTML rendering")
         async with async_playwright() as p:
             browser = await p.chromium.launch()
             page = await browser.new_page()
             logger.info("Setting HTML content in browser page")
-            await page.set_content(html_string)
+            await page.set_content(html_safe)
             logger.info("Taking screenshot of HTML content")
             await page.screenshot(path=image_file, full_page=True)
             await browser.close()
