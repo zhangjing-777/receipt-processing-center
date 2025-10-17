@@ -1,14 +1,13 @@
 import os
-import requests
-from dotenv import load_dotenv
 import json
-from typing import Dict, List
+from dotenv import load_dotenv
+from typing import Dict
 import logging
+from core.http_client import AsyncHTTPClient
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
 
 DEEPSEEK_URL = os.getenv("DEEPSEEK_URL") or ""
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
@@ -19,7 +18,8 @@ DEEP_HEADERS = {
 }
 
 
-def extract_fields_from_ocr(text):
+async def extract_fields_from_ocr(text):
+    """异步从 OCR 文本中提取字段"""
     logger.info("Extracting fields from OCR text.")
     prompt = f"""This is the raw text extracted from an invoice using OCR. 
     Please extract the following fields and output them as a JSON object, with strict type and format requirements:
@@ -59,8 +59,11 @@ def extract_fields_from_ocr(text):
         "temperature": 0.3,
         "stream": False
     }
+    
+    client = AsyncHTTPClient.get_client()
+    
     try:
-        response = requests.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
+        response = await client.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
         response.raise_for_status()
         response_data = response.json()
         
@@ -81,9 +84,9 @@ def extract_fields_from_ocr(text):
         raise
 
 
-def analyze_and_extract_subscription(ocr_text: str) -> dict:
+async def analyze_and_extract_subscription(ocr_text: str) -> dict:
     """
-    智能分析发票类型并提取字段
+    异步智能分析发票类型并提取字段
     
     如果是订阅发票，返回订阅字段；
     如果是普通发票，返回 None
@@ -106,9 +109,9 @@ Analyze the OCR-extracted text from an invoice and determine whether it represen
 
 ### Subscription Identification Criteria
 A subscription/recurring invoice usually includes:
-- Terms like “monthly”, “quarterly”, “annual”, “auto-renew”, “recurring”, “plan”, “billing period”, or “renewal”.
+- Terms like "monthly", "quarterly", "annual", "auto-renew", "recurring", "plan", "billing period", or "renewal".
 - Service or SaaS providers (e.g. AWS, Adobe, Claude, Hetzner, Cursor, Netflix, etc.)
-- Periods such as “09/2025”, “Sep 2025”, “2025-09”, “Billing Period: ...”
+- Periods such as "09/2025", "Sep 2025", "2025-09", "Billing Period: ..."
 - Total recurring cost or plans related to projects or accounts.
 
 If it is a subscription invoice, **extract the following fields** and infer missing ones logically.
@@ -120,7 +123,7 @@ If it is a subscription invoice, **extract the following fields** and infer miss
   "is_subscription": true,
   "subscription_fields": {{
     "seller_name": "service provider name",
-    "buyer_name": "service buyer name",
+    "buyer_name": "service purchaser name",
     "plan_name": "plan/subscription name",
     "billing_cycle": "monthly/quarterly/yearly/one-time",
     "amount": numeric_value,
@@ -136,18 +139,18 @@ If it is a subscription invoice, **extract the following fields** and infer miss
 ---
 
 ### 🧠 Date inference logic (VERY IMPORTANT)
-If the invoice contains a **period like “09/2025”**, assume:
+If the invoice contains a **period like "09/2025"**, assume:
 - It represents the covered service month.
-- If billing_cycle = “monthly” → 
+- If billing_cycle = "monthly" → 
   - start_date = first day of that month (e.g., 2025-09-01)
   - end_date = first day of the next month (e.g., 2025-10-01)
-- If billing_cycle = “quarterly” → 
+- If billing_cycle = "quarterly" → 
   - start_date = first day of the first month in that quarter
   - end_date = first day of the next quarter
-- If billing_cycle = “yearly” → 
+- If billing_cycle = "yearly" → 
   - start_date = first day of the year
   - end_date = first day of the next year
-- If the invoice explicitly mentions “period from ... to ...”, use those directly.
+- If the invoice explicitly mentions "period from ... to ...", use those directly.
 
 If no billing_cycle is mentioned but the text contains words like "for September", "09/2025", or "Monthly", treat it as **monthly**.
 
@@ -155,7 +158,7 @@ If no billing_cycle is mentioned but the text contains words like "for September
 
 ### Output Requirements
 - Return ONLY a valid JSON.
-- If it’s NOT a subscription invoice (e.g., taxi, hotel, restaurant, one-time order), return:
+- If it's NOT a subscription invoice (e.g., taxi, hotel, restaurant, one-time order), return:
 {{
   "is_subscription": false,
   "subscription_fields": null
@@ -178,8 +181,10 @@ OCR text:
         "stream": False
     }
     
+    client = AsyncHTTPClient.get_client()
+    
     try:
-        response = requests.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
+        response = await client.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
         response.raise_for_status()
         response_data = response.json()
         
@@ -198,7 +203,8 @@ OCR text:
         return json.dumps({"is_subscription": False, "subscription_fields": None})
    
     
-def generate_summary(invoices_info: Dict):
+async def generate_summary(invoices_info: Dict):
+    """异步生成发票汇总"""
     logger.info("Starting generate summary ...")
     system_message = """
     You are a receipt reimbursement assistant.
@@ -259,8 +265,11 @@ def generate_summary(invoices_info: Dict):
         "temperature": 0.3,
         "stream": False
     }
+    
+    client = AsyncHTTPClient.get_client()
+    
     try:
-        response = requests.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
+        response = await client.post(DEEPSEEK_URL, headers=DEEP_HEADERS, json=data)
         response.raise_for_status()
         response_data = response.json()
         

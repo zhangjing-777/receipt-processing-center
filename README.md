@@ -463,3 +463,11 @@ Key dependencies (see `requirements.txt` for full list):
 
 **Version**: 1.0.0  
 **Last Updated**: September 2025
+
+后续计划：
+
+如果用户数量增多，速度变慢，可以考虑将ocr，generation这些运行慢的，后台执行。
+
+多 worker（2个够了）
+后台任务队列（先观察）
+分布式部署（等规模大了再说）

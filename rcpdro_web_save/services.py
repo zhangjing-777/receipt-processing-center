@@ -9,21 +9,35 @@ from core.models import ReceiptItemsEN, SubscriptionRecords, ReceiptItemsENUploa
 from core.generation import extract_fields_from_ocr, analyze_and_extract_subscription
 from core.upload_files import smart_upload_files
 from core.process_files import process_files_parallel
+from core.batch_operations import BatchOperations
+from core.performance_monitor import timer, measure_time
 from rcpdro_web_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
-
-
 
 logger = logging.getLogger(__name__)
 
 
+@timer("upload_to_supabase")
 async def upload_to_supabase(user_id: str, files: List[UploadFile]):
+    """
+    完全异步的 Web 上传处理流程
+    
+    Args:
+        user_id: 用户 ID
+        files: 上传的文件列表
+        
+    Returns:
+        (status_message, success_count)
+    """
     logger.info(f"Starting upload_to_supabase for user_id: {user_id}, Total files to process: {len(files)}")
     
     try:
-        # 1. 上传文件到 Storage
+        # 1. 异步上传文件到 Storage
+        logger.info("Uploading files to storage...")
         public_urls = await smart_upload_files(user_id, files)
+        logger.info(f"Successfully uploaded {len(public_urls)} files")
         
         # 2. 并行处理 OCR 和字段提取
+        logger.info("Starting parallel OCR and field extraction...")
         successes, success_files, failures, subscription_files = await process_files_parallel(
             public_urls,
             user_id,
@@ -60,21 +74,18 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
                 encrypted_sub = encrypt_data("subscription_records", sub_row)
                 subscription_records.append(encrypted_sub)
         
-        # 4. 批量插入（一次性插入所有记录）
-        async with AsyncSessionLocal() as session:
-            if receipt_records:
-                await session.execute(
-                    insert(ReceiptItemsEN).values(receipt_records)
-                )
-                logger.info(f"Batch inserted {len(receipt_records)} receipt records")
-            
-            if subscription_records:
-                await session.execute(
-                    insert(SubscriptionRecords).values(subscription_records)
-                )
-                logger.info(f"Batch inserted {len(subscription_records)} subscription records")
-            
-            await session.commit()
+        # 4. 批量插入（使用优化的批量操作）
+        batch_ops = BatchOperations()
+        
+        if receipt_records:
+            async with measure_time("batch_insert_receipts"):
+                await batch_ops.batch_insert(ReceiptItemsEN, receipt_records)
+            logger.info(f"Batch inserted {len(receipt_records)} receipt records")
+        
+        if subscription_records:
+            async with measure_time("batch_insert_subscriptions"):
+                await batch_ops.batch_insert(SubscriptionRecords, subscription_records)
+            logger.info(f"Batch inserted {len(subscription_records)} subscription records")
         
         # 5. 生成状态报告
         total_files = len(public_urls)

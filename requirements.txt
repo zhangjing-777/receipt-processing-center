@@ -17,3 +17,5 @@ sqlalchemy[asyncio]
 alembic
 pydantic-settings
 redis[asyncio]
+httpx
+psutil

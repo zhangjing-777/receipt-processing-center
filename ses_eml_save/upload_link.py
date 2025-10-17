@@ -1,20 +1,26 @@
 import uuid
-import requests
 import logging
-from io import BytesIO
-from typing import List
+import asyncio
+from typing import List, Dict
 from datetime import datetime
 from bs4 import BeautifulSoup
-from supabase import create_client, Client
 from core.config import settings
+from core.http_client import AsyncHTTPClient
+from core.supabase_storage import get_async_storage_client
 
-
-# 设置日志
 logger = logging.getLogger(__name__)
 
-supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
-def extract_pdf_invoice_urls(html: str) -> list[str]:
+def extract_pdf_invoice_urls(html: str) -> List[str]:
+    """
+    从 HTML 中提取 PDF 发票链接 (同步，因为只是解析)
+    
+    Args:
+        html: HTML 内容
+        
+    Returns:
+        PDF 链接列表
+    """
     logger.info("Extracting PDF invoice URLs from HTML content")
     soup = BeautifulSoup(html, "html.parser")
     links = soup.find_all("a", string=lambda text: text and "Download PDF invoice" in text)
@@ -22,43 +28,90 @@ def extract_pdf_invoice_urls(html: str) -> list[str]:
     logger.info(f"Found {len(urls)} PDF invoice URLs")
     return urls
 
-def upload_invoice_pdf_to_supabase(pdf_urls: List[str], user_id:str, show: str) -> dict:
-    logger.info(f"Starting PDF upload process for {len(pdf_urls)} URLs with show: {show}")
-    public_urls = {}
+
+async def download_and_upload_single_pdf(
+    pdf_url: str,
+    user_id: str,
+    show: str,
+    index: int
+) -> tuple[str, str]:
+    """
+    异步下载单个 PDF 并上传到存储
     
-    for i, pdf_url in enumerate(pdf_urls, 1):
-        logger.info(f"Processing PDF {i}/{len(pdf_urls)}: {pdf_url}")
+    Args:
+        pdf_url: PDF 下载链接
+        user_id: 用户 ID
+        show: 显示名称
+        index: 索引号
         
-        try:
-            # 下载 PDF 到内存
-            logger.info(f"Downloading PDF from: {pdf_url}")
-            response = requests.get(pdf_url)
-            if response.status_code != 200:
-                error_msg = f"下载 PDF 失败: {response.status_code}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
-            
-            logger.info(f"PDF downloaded successfully, size: {len(response.content)} bytes")
+    Returns:
+        (display_name, storage_path) 或 (display_name, "")
+    """
+    http_client = AsyncHTTPClient.get_client()
+    storage_client = get_async_storage_client()
+    
+    try:
+        logger.info(f"Downloading PDF from: {pdf_url}")
+        
+        # 异步下载 PDF
+        response = await http_client.get(pdf_url)
+        response.raise_for_status()
+        
+        logger.info(f"PDF downloaded successfully, size: {len(response.content)} bytes")
 
-            id = str(uuid.uuid4())[:8]
-            filename = f"save/{user_id}/{datetime.utcnow().date().isoformat()}/eml_att_{datetime.utcnow().timestamp()}_{id}.pdf"
-            logger.info(f"Generated storage filename: {filename}")
+        id_suffix = str(uuid.uuid4())[:8]
+        filename = f"save/{user_id}/{datetime.utcnow().date().isoformat()}/eml_att_{datetime.utcnow().timestamp()}_{id_suffix}.pdf"
+        logger.info(f"Generated storage filename: {filename}")
 
-            # 上传到 Supabase Storage
-            logger.info(f"Uploading PDF to Supabase Storage: {filename}")
-            file = BytesIO(response.content).getvalue()
-            supabase.storage.from_(settings.supabase_bucket).upload(file=file, path=filename, file_options={"content-type": "application/pdf"})
-            logger.info(f"PDF uploaded successfully to Supabase")
+        # 异步上传到存储
+        logger.info(f"Uploading PDF to storage: {filename}")
+        result = await storage_client.upload(
+            path=filename,
+            file_data=response.content,
+            content_type="application/pdf"
+        )
+        
+        if result["success"]:
+            logger.info(f"✅ PDF uploaded successfully")
+            display_name = f"{show}_{id_suffix}"
+            return (display_name, filename)
+        else:
+            logger.warning(f"❌ Upload failed: {result.get('error')}")
+            return (f"{show}_{id_suffix}", "")
+        
+    except Exception as e:
+        logger.exception(f"Failed to process PDF {index}: {pdf_url} - Error: {str(e)}")
+        return (f"{show}_{index}", "")
 
-            # 获取 Public URL
-            # public_url = supabase.storage.from_(settings.supabase_bucket).get_public_url(filename).rstrip('?')
-            # public_urls[f"{show}_{id}"] = public_url
-            # logger.info(f"Generated public URL: {public_urls}")
-            public_urls[f"{show}_{id}"] = filename
-            
-        except Exception as e:
-            logger.exception(f"Failed to process PDF {i}: {pdf_url} - Error: {str(e)}")
-            raise
+
+async def upload_invoice_pdf_to_supabase(
+    pdf_urls: List[str],
+    user_id: str,
+    show: str
+) -> Dict[str, str]:
+    """
+    异步批量下载并上传 PDF 发票
+    
+    Args:
+        pdf_urls: PDF 链接列表
+        user_id: 用户 ID
+        show: 显示名称前缀
+        
+    Returns:
+        {display_name: storage_path} 字典
+    """
+    logger.info(f"Starting PDF upload process for {len(pdf_urls)} URLs with show: {show}")
+    
+    # 并发下载和上传所有 PDF
+    tasks = [
+        download_and_upload_single_pdf(url, user_id, show, i)
+        for i, url in enumerate(pdf_urls, 1)
+    ]
+    
+    results = await asyncio.gather(*tasks)
+    
+    # 组装结果字典
+    public_urls = {name: path for name, path in results if path}
     
     logger.info(f"PDF upload process completed. Total files uploaded: {len(public_urls)}")
     return public_urls

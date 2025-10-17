@@ -6,15 +6,28 @@ from core.models import ReceiptUsageQuotaReceiptEN, ReceiptUsageQuotaRequestEN
 
 logger = logging.getLogger(__name__)
 
+
 class QuotaManager:
+    """配额管理器 (完全异步)"""
+    
     def __init__(self, user_id: str, table: str = "receipt_usage_quota_receipt_en"):
         self.user_id = user_id
         self.table = table
         self.used_month = 0
-        self.model = ReceiptUsageQuotaReceiptEN if table == "receipt_usage_quota_receipt_en" else ReceiptUsageQuotaRequestEN
+        self.month_limit = 0
+        self.model = (
+            ReceiptUsageQuotaReceiptEN 
+            if table == "receipt_usage_quota_receipt_en" 
+            else ReceiptUsageQuotaRequestEN
+        )
 
     async def check_and_reset(self):
-        """检查并重置配额"""
+        """
+        异步检查并重置配额
+        
+        Raises:
+            ValueError: 如果配额不存在或已达上限
+        """
         async with AsyncSessionLocal() as session:
             # 查询配额
             result = await session.execute(
@@ -26,7 +39,7 @@ class QuotaManager:
                 raise ValueError(f"Quota record not found for user_id={self.user_id}")
 
             # 检查是否需要重置
-            today = date.today()  # 使用 date.today() 而不是 datetime.now().date()
+            today = date.today()
             today_str = today.isoformat()  # "YYYY-MM-DD"
             current_month = today_str[:7]  # "YYYY-MM"
             
@@ -46,14 +59,15 @@ class QuotaManager:
                 await session.execute(
                     update(self.model)
                     .where(self.model.user_id == self.user_id)
-                    .values(used_month=0, last_reset_date=today)  # 直接传 date 对象
+                    .values(used_month=0, last_reset_date=today)
                 )
                 await session.commit()
+                logger.info(f"Quota reset for user_id: {self.user_id}")
             else:
                 self.used_month = quota_data.used_month
 
-            month_limit = quota_data.month_limit
-            allowed = self.used_month < month_limit
+            self.month_limit = quota_data.month_limit
+            allowed = self.used_month < self.month_limit
 
             if not allowed:
                 remark = "⚠️ You have reached your month usage limit. Please try next period or upgrade your plan for more quota."
@@ -65,11 +79,17 @@ class QuotaManager:
                 await session.commit()
                 raise ValueError(remark)
 
-            logger.info(f"user_id:{self.user_id}, used_month:{self.used_month}, month_limit:{month_limit}")
+            logger.info(f"Quota check - user_id: {self.user_id}, used: {self.used_month}/{self.month_limit}")
 
     async def increment_usage(self, success_count: int):
-        """增加使用量"""
+        """
+        异步增加使用量
+        
+        Args:
+            success_count: 成功处理的数量
+        """
         new_used = self.used_month + success_count
+        
         async with AsyncSessionLocal() as session:
             await session.execute(
                 update(self.model)
@@ -77,5 +97,26 @@ class QuotaManager:
                 .values(used_month=new_used)
             )
             await session.commit()
-            self.used_month = new_used
-            logger.info(f"user_id:{self.user_id}, used_month:{self.used_month}")
+            
+        self.used_month = new_used
+        logger.info(f"Quota updated - user_id: {self.user_id}, new usage: {self.used_month}/{self.month_limit}")
+    
+    async def get_remaining(self) -> int:
+        """
+        获取剩余配额
+        
+        Returns:
+            剩余可用次数
+        """
+        return max(0, self.month_limit - self.used_month)
+    
+    async def get_usage_percentage(self) -> float:
+        """
+        获取使用百分比
+        
+        Returns:
+            使用百分比 (0-100)
+        """
+        if self.month_limit == 0:
+            return 0.0
+        return (self.used_month / self.month_limit) * 100
