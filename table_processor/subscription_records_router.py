@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, date
 import logging
 import asyncio
 import calendar
-from sqlalchemy import select, update, delete, and_, insert
+import hashlib
+from sqlalchemy import select, update, func, and_, insert
 from core.database import AsyncSessionLocal
 from core.models import SubscriptionRecords
 from core.encryption import encrypt_data
@@ -70,10 +71,8 @@ class InsertRequest(BaseModel):
 class DeleteRequest(BaseModel):
     user_id: str
     inds: List[int]
-
-
-# ========== 查询接口 (智能订阅识别) ==========
-
+    
+# get
 @router.post("/get-subscriptions")
 @timer("get_subscriptions")
 async def get_subscriptions(request: GetRequest):
@@ -90,57 +89,51 @@ async def get_subscriptions(request: GetRequest):
     try:
         today = datetime.utcnow().date()
 
-        # ✅ Step 1: 查询所有订阅记录
         async with measure_time("database_query"):
             async with AsyncSessionLocal() as session:
-                base_query = select(SubscriptionRecords).where(
-                    SubscriptionRecords.user_id == request.user_id
-                ).order_by(
-                    SubscriptionRecords.seller_name,
-                    SubscriptionRecords.buyer_name,
-                    SubscriptionRecords.plan_name,
-                    SubscriptionRecords.currency,
-                    SubscriptionRecords.amount,
-                    SubscriptionRecords.start_date.asc()
+                # 使用窗口函数找每个 chain 的最大 ind
+                subquery = (
+                    select(
+                        SubscriptionRecords,
+                        func.row_number().over(
+                            partition_by=SubscriptionRecords.chain_key_bidx,
+                            order_by=SubscriptionRecords.ind.desc()
+                        ).label('rn')
+                    )
+                    .where(SubscriptionRecords.user_id == request.user_id)
+                    .subquery()
                 )
-
-                result = await session.execute(base_query)
+                
+                # 只取每个 chain 的第一条（ind 最大的）
+                query = select(subquery).where(subquery.c.rn == 1)
+                
+                result = await session.execute(query)
                 records = result.mappings().all()
 
         if not records:
             return {"message": "No records found", "data": [], "total": 0, "status": "success"}
 
-        # ✅ Step 2: 并行解密所有记录
+        logger.info(f"Found {len(records)} unique subscription chains")
+
+        # 并行解密
         async with measure_time("decrypt_records"):
             decrypted_result = await asyncio.gather(
                 *[process_record(r, "subscription_records") for r in records]
             )
 
-        # ✅ Step 3: 按订阅链分组（识别续期）
-        async with measure_time("group_subscriptions"):
-            chains = await asyncio.to_thread(
-                _group_subscription_chains,
-                decrypted_result
-            )
-
-        # ✅ Step 4: 提取每个链的最新记录
-        latest_records = [chain[-1] for chain in chains]
-
-        # ✅ Step 5: 并行计算状态和剩余天数
+        # 并行计算状态
         async with measure_time("calculate_status"):
             enriched_result = await asyncio.gather(
-                *[_enrich_subscription(record, today) for record in latest_records]
+                *[_enrich_subscription(record, today) for record in decrypted_result]
             )
 
-        # ✅ Step 6: 按状态筛选
+        # 按状态筛选
         if request.status and request.status != "string":
             view = request.status.lower()
             enriched_result = [
                 r for r in enriched_result if r.get("status_label") == view
             ]
-            logger.info(f"Filtered by status: {view}, count={len(enriched_result)}")
 
-        logger.info(f"Found {len(enriched_result)} latest subscription records")
         return {
             "message": "Query success",
             "data": enriched_result,
@@ -151,59 +144,6 @@ async def get_subscriptions(request: GetRequest):
     except Exception as e:
         logger.exception(f"Failed to query subscriptions: {str(e)}")
         raise
-
-
-def _group_subscription_chains(records: List[dict]) -> List[List[dict]]:
-    """
-    分组订阅链（同步函数，在线程池中执行）
-    
-    识别逻辑:
-    - 相同 (user_id, buyer_name, seller_name, plan_name, currency, amount) 为同一订阅
-    - 连续周期 (start_date - prev_end <= 3天) 视为续期
-    """
-    chains = []
-    prev_key = None
-    prev_end = None
-    current_chain = []
-
-    for r in records:
-        # 解析日期
-        start_date = r.get("start_date")
-        end_date = r.get("end_date")
-        
-        if isinstance(start_date, str):
-            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-        if isinstance(end_date, str):
-            end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
-
-        # 唯一订阅键
-        key = (
-            r.get("user_id"),
-            r.get("buyer_name", ""),
-            r.get("seller_name", ""),
-            r.get("plan_name", ""),
-            r.get("currency", ""),
-            float(r.get("amount", 0))
-        )
-
-        # 判断是否与上一条属于同一链
-        if key == prev_key and prev_end and start_date and (start_date - prev_end).days <= 3:
-            # 同一订阅链的续期
-            current_chain.append(r)
-        else:
-            # 开启新链
-            if current_chain:
-                chains.append(current_chain)
-            current_chain = [r]
-        
-        prev_end = end_date
-        prev_key = key
-
-    if current_chain:
-        chains.append(current_chain)
-    
-    return chains
-
 
 async def _enrich_subscription(record: dict, today: date) -> dict:
     """
@@ -473,10 +413,23 @@ def _calculate_annual_cost(amount: float, cycle: str) -> float:
 
 # ========== 更新接口 ==========
 
+def calculate_chain_key_bidx(user_id: str, data: dict) -> str:
+    """计算 chain_key_bidx hash 值"""
+    hash_input = "|".join([
+        str(user_id),
+        str(data.get("buyer_name", "")),
+        str(data.get("seller_name", "")),
+        str(data.get("plan_name", "")),
+        str(data.get("currency", "USD")),
+        str(data.get("amount", 0))
+    ])
+    return hashlib.md5(hash_input.encode()).hexdigest()
+
+
 @router.post("/update-subscription")
 @timer("update_subscription")
 async def update_subscription(request: UpdateRequest):
-    """优化的更新接口"""
+    """优化的更新接口 - 包含 hash 字段"""
     try:
         update_data = {}
         for field, value in request.dict(exclude={'ind', 'user_id'}, by_alias=True).items():
@@ -486,11 +439,42 @@ async def update_subscription(request: UpdateRequest):
         if not update_data:
             return {"message": "No data to update", "status": "success"}
         
-        update_data["updated_at"] = datetime.utcnow()
-        encrypted_update_data = encrypt_data("subscription_records", update_data)
+        async with AsyncSessionLocal() as session:
+            # 1. 先查询现有记录
+            query_result = await session.execute(
+                select(SubscriptionRecords)
+                .where(and_(
+                    SubscriptionRecords.ind == request.ind,
+                    SubscriptionRecords.user_id == request.user_id
+                ))
+            )
+            existing_record = query_result.scalar_one_or_none()
+            
+            if not existing_record:
+                return {"error": "No matching record found", "status": "error"}
+            
+            # 2. 解密现有数据
+            existing_data = await process_record(
+                existing_record.__dict__, 
+                "subscription_records"
+            )
+            
+            # 3. 合并数据：现有数据 + 更新数据
+            merged_data = existing_data.copy()
+            merged_data.update(update_data)
+            
+            # 4. 添加时间戳
+            update_data["updated_at"] = datetime.utcnow()
+            
+            # 5. 用合并后的完整数据计算 hash
+            chain_key_bidx = calculate_chain_key_bidx(request.user_id, merged_data)
+            update_data["chain_key_bidx"] = chain_key_bidx
+            
+            # 6. 加密更新数据
+            encrypted_update_data = encrypt_data("subscription_records", update_data)
 
-        async with measure_time("database_update"):
-            async with AsyncSessionLocal() as session:
+            # 7. 执行更新
+            async with measure_time("database_update"):
                 result = await session.execute(
                     update(SubscriptionRecords)
                     .where(and_(
@@ -503,32 +487,31 @@ async def update_subscription(request: UpdateRequest):
                 await session.commit()
                 updated_records = result.mappings().all()
 
-        if not updated_records:
-            return {"error": "No matching record found", "status": "error"}
+            if not updated_records:
+                return {"error": "Update operation failed", "status": "error"}
 
-        # 并行解密
-        decrypted_result = await asyncio.gather(
-            *[process_record(r, "subscription_records") for r in updated_records]
-        )
-        
-        return {
-            "message": "Subscription updated successfully",
-            "updated_records": len(decrypted_result),
-            "data": decrypted_result,
-            "status": "success"
-        }
+            # 8. 并行解密结果
+            decrypted_result = await asyncio.gather(
+                *[process_record(r, "subscription_records") for r in updated_records]
+            )
+            
+            return {
+                "message": "Subscription updated successfully",
+                "updated_records": len(decrypted_result),
+                "data": decrypted_result,
+                "status": "success"
+            }
 
     except Exception as e:
         logger.exception(f"Failed to update subscription: {str(e)}")
         return {"error": f"Failed to update subscription: {str(e)}", "status": "error"}
-
-
+    
 # ========== 插入接口 ==========
 
 @router.post("/insert-subscription")
 @timer("insert_subscription")
 async def insert_subscription(request: InsertRequest):
-    """优化的插入接口"""
+    """优化的插入接口 - 包含 hash 字段"""
     try:
         insert_data = {}
         for field, value in request.dict(exclude={'user_id'}, by_alias=True).items():
@@ -544,6 +527,10 @@ async def insert_subscription(request: InsertRequest):
         if "created_at" not in insert_data:
             insert_data["created_at"] = now_utc
 
+        # 计算并添加 hash 字段（insert 时所有字段都是新的，直接用 insert_data）
+        chain_key_bidx = calculate_chain_key_bidx(request.user_id, insert_data)
+        insert_data["chain_key_bidx"] = chain_key_bidx
+        
         # 加密
         encrypted_data = encrypt_data("subscription_records", insert_data)
         encrypted_data["user_id"] = request.user_id
@@ -576,7 +563,6 @@ async def insert_subscription(request: InsertRequest):
     except Exception as e:
         logger.exception(f"Failed to insert subscription: {str(e)}")
         return {"error": f"Failed to insert subscription: {str(e)}", "status": "error"}
-
 
 # ========== 删除接口 ==========
 

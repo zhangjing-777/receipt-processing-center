@@ -111,6 +111,7 @@ class SubscriptionRecords(Base):
     status = Column(Text, default="active", index=True)
     source = Column(Text)
     note = Column(Text)
+    chain_key_bidx = Column(Text, index=True)  # 订阅链哈希索引
     created_at = Column(AutoConvertDateTime, default=datetime.utcnow)  # 🔥 使用自定义类型
     updated_at = Column(AutoConvertDateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # 🔥 使用自定义类型
 

@@ -29,6 +29,14 @@ def safe_filename(label: str, url: str) -> str:
     file_name = re.sub(r'[\/:*?"<>| ]', "_", file_name)
     return file_name
 
+def sanitize_component(s: str) -> str:
+    """清洗单个路径片段，防止产生意外目录/路径穿越"""
+    s = str(s or "").strip().replace("\\", "/")
+    # 去掉路径穿越
+    s = s.replace("../", "").replace("..", "")
+    # 去掉不合法字符（保留 / 由我们自己控制）
+    s = re.sub(r'[\/:*?"<>|]', "_", s)
+    return s or "unknown"
 
 async def fetch_file(file_url: str, arcname: str, retries: int = 3) -> Tuple[str, Optional[bytes]]:
     """
@@ -105,8 +113,11 @@ async def generate_download_zip(user_id: str, data: Dict) -> str:
         for invoice_date, category_dict in date_dict.items():
             for category, file_dict in category_dict.items():
                 for file_url, label in file_dict.items():
+                    buyer_s   = sanitize_component(buyer)
+                    date_s    = sanitize_component(invoice_date)
+                    category_s= sanitize_component(category)
                     file_name = safe_filename(label, file_url)
-                    arcname = f"{buyer}/{invoice_date}/{category}/{file_name}"
+                    arcname   = "/".join((buyer_s, date_s, category_s, file_name))
                     tasks.append(fetch_file(file_url, arcname))
 
     logger.info(f"Downloading {len(tasks)} files concurrently...")

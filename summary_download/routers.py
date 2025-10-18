@@ -22,7 +22,7 @@ async def receipt_summary_download_ai(user_id: str, title:str, invoices: List[Di
     try:
         logger.info("Starting check and reset quato ...")
         quato_manager = QuotaManager(user_id, table="receipt_usage_quota_request_en")
-        quato_manager.check_and_reset()
+        await quato_manager.check_and_reset()
         logger.info("Check and reset quato successfully")
 
         result = await get_summary_invoices(user_id, title, invoices, used_ai=True)
@@ -30,7 +30,7 @@ async def receipt_summary_download_ai(user_id: str, title:str, invoices: List[Di
         logger.info("Starting update usage count ...")
         if result:
             count = classify(len(invoices))
-            quato_manager.increment_usage(count)
+            await quato_manager.increment_usage(count)
             logger.info("Update usage count successfully")
         
         return result

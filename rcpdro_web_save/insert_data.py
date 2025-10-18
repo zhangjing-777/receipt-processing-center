@@ -111,6 +111,18 @@ class SubscriptDataPreparer:
     def build_subscript_data(self) -> Dict[str, Any]:
         logger.info("Building subscript data dictionary.")
         try:
+            # 生成 hash_id，识别同期订阅
+            hash_input = "|".join([
+                str(self.user_id),
+                str(self.fields.get("buyer_name", "")),
+                str(self.fields.get("seller_name", "")),
+                str(self.fields.get("plan_name", "")),
+                str(self.fields.get("currency", "USD")),
+                str(self.fields.get("amount", 0))
+            ])
+
+            chain_key_bidx = hashlib.md5(hash_input.encode()).hexdigest()
+
             data = {
                 "id": RECORD_ID,
                 "user_id": self.user_id,
@@ -126,6 +138,7 @@ class SubscriptDataPreparer:
                 "status": self.determine_status(),
                 "source": self.source,
                 "note": self.fields.get("note"),
+                "chain_key_bidx": chain_key_bidx,
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }

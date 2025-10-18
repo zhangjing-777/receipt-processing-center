@@ -1,6 +1,7 @@
 import os
 import logging
 from typing import Optional, Dict, Any
+from urllib.parse import urljoin, quote
 from dotenv import load_dotenv
 from core.http_client import AsyncHTTPClient
 
@@ -121,7 +122,7 @@ class AsyncSupabaseStorage:
         except Exception as e:
             logger.exception(f"❌ Delete failed: {str(e)}")
             return {"success": False, "error": str(e)}
-    
+
     async def create_signed_url(self, path: str, expires_in: int = 3600) -> Optional[str]:
         """
         异步创建签名 URL
@@ -133,33 +134,46 @@ class AsyncSupabaseStorage:
         Returns:
             签名 URL
         """
-        url = f"{self.base_url}/object/sign/{self.bucket}/{path}"
-        
+        # 1) 规范 Storage 基址：确保带 /storage/v1
+        storage_base = self.base_url if "/storage/v1" in self.base_url \
+            else f"{self.base_url.rstrip('/')}/storage/v1"
+
+        # 2) 规范对象路径：去前导斜杠；若误传含桶名前缀则去重；URL 编码（保留 /）
+        object_path = path.lstrip("/")
+        bucket_prefix = f"{self.bucket}/"
+        if object_path.startswith(bucket_prefix):
+            object_path = object_path[len(bucket_prefix):]
+        safe_object_path = quote(object_path, safe="/")
+
+        # 3) 签名接口
+        sign_url = f"{storage_base}/object/sign/{self.bucket}/{safe_object_path}"
+
         client = AsyncHTTPClient.get_client()
-        
         try:
             logger.info(f"Creating signed URL for: {path}")
-            response = await client.post(
-                url,
+            resp = await client.post(
+                sign_url,
                 headers={**self.headers, "Content-Type": "application/json"},
-                json={"expiresIn": expires_in}
+                json={"expiresIn": int(expires_in)},
+                timeout=15.0,
             )
-            response.raise_for_status()
-            
-            result = response.json()
-            signed_path = result.get("signedURL")
-            
-            if signed_path:
-                # 组装完整 URL
-                full_url = f"{SUPABASE_URL}{signed_path}"
-                logger.info(f"✅ Created signed URL for: {path}")
-                return full_url
-            else:
+            resp.raise_for_status()
+            data = resp.json()
+
+            # 4) 兼容相对/绝对返回，统一成完整 URL
+            signed_path = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
+            if not signed_path:
                 logger.warning(f"No signedURL in response for: {path}")
                 return None
-                
+
+            full_url = signed_path if signed_path.startswith(("http://", "https://")) \
+                else urljoin(storage_base.rstrip("/") + "/", signed_path.lstrip("/"))
+
+            logger.info(f"✅ Created signed URL for: {path}")
+            return full_url
+
         except Exception as e:
-            logger.exception(f"❌ Failed to create signed URL for {path}: {str(e)}")
+            logger.warning(f"Failed to generate signed URL for {path}: {e}")
             return None
     
     def get_public_url(self, path: str) -> str:
