@@ -161,7 +161,7 @@ async def get_receipt(request: GetReceiptRequest):
 @router.post("/update-receipt-items")
 @timer("update_receipt_items")
 async def update_receipt(request: UpdateReceiptRequest):
-    """优化的更新接口"""
+    """根据record_id和user_id更新收据信息接口"""
     logger.info(f"Updating receipt: ind={request.ind}, user_id={request.user_id}")
     
     try:
@@ -224,7 +224,7 @@ async def update_file_url(
     ind: int = Form(...),
     file: UploadFile = File(...)
 ):
-    """优化的文件上传接口"""
+    """上传新文件到 Storage，并更新数据库里的加密 file_url"""
     storage_client = get_async_storage_client()
     
     try:
@@ -285,7 +285,7 @@ async def update_file_url(
 @router.delete("/delete-receipt-items")
 @timer("delete_receipt_items")
 async def delete_receipt(request: DeleteReceiptRequest):
-    """优化的批量删除接口"""
+    """根据 ind 和 user_id 批量删除收据信息和 storage 文件"""
     logger.info(f"Deleting receipts for user_id: {request.user_id}, inds: {request.inds}")
     
     try:

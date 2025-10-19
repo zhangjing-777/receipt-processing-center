@@ -429,7 +429,7 @@ def calculate_chain_key_bidx(user_id: str, data: dict) -> str:
 @router.post("/update-subscription")
 @timer("update_subscription")
 async def update_subscription(request: UpdateRequest):
-    """优化的更新接口 - 包含 hash 字段"""
+    """根据 ind 和 user_id 更新 subscription_records 表"""
     try:
         update_data = {}
         for field, value in request.dict(exclude={'ind', 'user_id'}, by_alias=True).items():
@@ -511,7 +511,9 @@ async def update_subscription(request: UpdateRequest):
 @router.post("/insert-subscription")
 @timer("insert_subscription")
 async def insert_subscription(request: InsertRequest):
-    """优化的插入接口 - 包含 hash 字段"""
+    """
+    新增一条 subscription_records 记录（数据库自动自增 ind）
+    """
     try:
         insert_data = {}
         for field, value in request.dict(exclude={'user_id'}, by_alias=True).items():
@@ -569,7 +571,7 @@ async def insert_subscription(request: InsertRequest):
 @router.delete("/delete-subscriptions")
 @timer("delete_subscriptions")
 async def delete_subscriptions(request: DeleteRequest):
-    """优化的批量删除接口"""
+    """根据 ind 和 user_id 删除 subscription_records 表记录"""
     try:
         if not request.inds:
             return {"error": "inds list cannot be empty", "status": "error"}
