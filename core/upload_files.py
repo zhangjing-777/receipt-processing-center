@@ -1,5 +1,8 @@
 import logging
 import asyncio
+from PIL import Image
+import pillow_heif
+from io import BytesIO
 from datetime import datetime
 from typing import List, Dict
 from fastapi import UploadFile
@@ -8,6 +11,38 @@ from core.supabase_storage import get_async_storage_client
 
 logger = logging.getLogger(__name__)
 
+# 注册 HEIF 格式支持
+pillow_heif.register_heif_opener()
+
+async def convert_heic_to_png(file_content: bytes) -> tuple[bytes, str]:
+    """
+    异步转换 HEIC 到 PNG
+    
+    Args:
+        file_content: HEIC 文件内容
+        
+    Returns:
+        (png_content, "image/png")
+    """
+    try:
+        # 在线程池中执行转换（CPU 密集型操作）
+        loop = asyncio.get_running_loop()
+        png_content = await loop.run_in_executor(
+            None,
+            _convert_heic_sync,
+            file_content
+        )
+        return png_content, "image/png"
+    except Exception as e:
+        logger.exception(f"Failed to convert HEIC to PNG: {e}")
+        raise
+
+def _convert_heic_sync(file_content: bytes) -> bytes:
+    """同步转换函数"""
+    heif_image = Image.open(BytesIO(file_content))
+    png_buffer = BytesIO()
+    heif_image.save(png_buffer, format='PNG')
+    return png_buffer.getvalue()
 
 async def upload_single_file(
     user_id: str,
@@ -31,8 +66,19 @@ async def upload_single_file(
         # 读取文件内容
         file_content = await file.read()
         
+        # 检查是否为 HEIC 格式
+        original_filename = file.filename
+        content_type = file.content_type or "application/octet-stream"
+        
+        if original_filename.lower().endswith(('.heic', '.heif')):
+            logger.info(f"Converting HEIC file: {original_filename}")
+            file_content, content_type = await convert_heic_to_png(file_content)
+            # 修改文件名后缀
+            safe_filename = make_safe_storage_path(original_filename.rsplit('.', 1)[0] + '.png')
+        else:
+            safe_filename = make_safe_storage_path(original_filename)
+        
         # 生成安全路径
-        safe_filename = make_safe_storage_path(file.filename)
         date_url = datetime.utcnow().date().isoformat()
         timestamp = datetime.utcnow().isoformat()
         storage_path = f"{file_type}/{user_id}/{date_url}/{timestamp}_{safe_filename}"
@@ -41,22 +87,21 @@ async def upload_single_file(
         result = await storage_client.upload(
             path=storage_path,
             file_data=file_content,
-            content_type=file.content_type or "application/octet-stream"
+            content_type=content_type
         )
         
         if result["success"]:
-            logger.info(f"✅ Uploaded {file.filename} to {storage_path}")
+            logger.info(f"✅ Uploaded {original_filename} to {storage_path}")
             # 重置文件指针
             await file.seek(0)
-            return (file.filename, storage_path)
+            return (original_filename, storage_path)
         else:
-            logger.warning(f"❌ Upload failed for {file.filename}: {result.get('error')}")
-            return (file.filename, "")
+            logger.warning(f"❌ Upload failed for {original_filename}: {result.get('error')}")
+            return (original_filename, "")
             
     except Exception as e:
         logger.exception(f"Exception uploading {file.filename}: {e}")
         return (file.filename, "")
-
 
 async def upload_files_to_supabase_async(
     user_id: str,

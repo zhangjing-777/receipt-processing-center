@@ -19,3 +19,5 @@ pydantic-settings
 redis[asyncio]
 httpx
 psutil
+pillow-heif
+Pillow
