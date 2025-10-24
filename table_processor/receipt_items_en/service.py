@@ -1,78 +1,57 @@
 import logging
 import asyncio
-from typing import Optional, List
-from pydantic import BaseModel, Field
-from datetime import datetime, timedelta
 import calendar
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from typing import Dict, List, Optional
+from datetime import datetime, timedelta
 from sqlalchemy import select, update, delete, and_
+from fastapi import UploadFile
 from core.database import AsyncSessionLocal
-from core.config import settings
 from core.models import ReceiptItemsEN, SesEmlInfoEN
-from core.encryption import encrypt_data, decrypt_data
+from core.encryption import encrypt_value, encrypt_data, decrypt_value
 from core.upload_files import upload_files_to_supabase_async
 from core.supabase_storage import get_async_storage_client
 from core.batch_operations import BatchOperations
-from core.performance_monitor import timer, measure_time
+from core.performance_monitor import measure_time
 from table_processor.utils import process_record
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/receipt-items-en", tags=["receipt_items_en表操作"])
 
-# ========== 请求模型 ==========
-
-class GetReceiptRequest(BaseModel):
-    user_id: str
-    ind: Optional[int] = None
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    year: Optional[int] = None
-    month: Optional[int] = None
-    limit: Optional[int] = 0
-    offset: Optional[int] = 0
-
-class UpdateReceiptRequest(BaseModel):
-    ind: int = Field(..., description="记录ID")
-    user_id: str = Field(..., description="用户ID")
+class ReceiptItemsENService:
+    """receipt_items_en 业务逻辑层"""
     
-    buyer: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    seller: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    invoice_date: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    category: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    invoice_total: Optional[float] = Field(default=None, json_schema_extra={"default": None})
-    currency: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    invoice_number: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    address: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    original_info: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    ocr: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    hash_id: Optional[str] = Field(default=None, json_schema_extra={"default": None})
-    create_time: Optional[str] = Field(default=None, json_schema_extra={"default": None})
+    @staticmethod
+    async def get_receipts(
+        user_id: str,
+        ind: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+        limit: int = 0,
+        offset: int = 0
+    ) -> Dict:
+        """
+        根据条件查询收据信息
+        
+        Args:
+            user_id: 用户 ID
+            ind: 精确查询
+            start_time: 开始时间
+            end_time: 结束时间
+            year: 年份
+            month: 月份
+            limit: 分页大小
+            offset: 分页偏移
+            
+        Returns:
+            查询结果
+        """
+        logger.info(
+            f"Querying receipts for user_id: {user_id}, "
+            f"ind: {ind}, year: {year}, month: {month}"
+        )
 
-class DeleteReceiptRequest(BaseModel):
-    user_id: str
-    inds: List[int]
-
-
-# ========== 查询接口 ==========
-
-@router.post("/get-receipt-items")
-@timer("get_receipt_items")
-async def get_receipt(request: GetReceiptRequest):
-    """
-    根据 user_id 和条件查询收据信息:
-    1. ind 精确查询
-    2. year + month 按月查询 invoice_date
-    3. create_time 时间范围 (YYYY-MM-DD → timestamptz 范围)
-    4. limit+offset 分页查询
-    默认查询“上个月invoice_date”的所有记录
-    """
-    logger.info(
-        f"Querying receipts for user_id: {request.user_id}, "
-        f"ind: {request.ind}, year: {request.year}, month: {request.month}"
-    )
-
-    try:
         async with measure_time("database_query"):
             async with AsyncSessionLocal() as session:
                 # 构建查询
@@ -88,16 +67,15 @@ async def get_receipt(request: GetReceiptRequest):
                     ReceiptItemsEN.currency,
                     ReceiptItemsEN.file_url,
                     ReceiptItemsEN.address
-                ).where(ReceiptItemsEN.user_id == request.user_id)
+                ).where(ReceiptItemsEN.user_id == user_id)
 
                 # 精确查询
-                if request.ind:
-                    query = query.where(ReceiptItemsEN.ind == request.ind)
-                    logger.info(f"Exact query for ind: {request.ind}")
+                if ind:
+                    query = query.where(ReceiptItemsEN.ind == ind)
+                    logger.info(f"Exact query for ind: {ind}")
 
                 # 按年月查询
-                elif request.year and request.month:               
-                    year, month = request.year, request.month
+                elif year and month:               
                     start_dt = datetime(year, month, 1)
                     _, last_day = calendar.monthrange(year, month)
                     end_dt = datetime(year, month, last_day, 23, 59, 59, 999999)
@@ -108,21 +86,21 @@ async def get_receipt(request: GetReceiptRequest):
                     logger.info(f"Monthly query: {year}-{month:02d}")
 
                 # 时间范围查询
-                elif request.start_time != "string" and request.end_time != "string":
-                    start_dt = datetime.strptime(request.start_time, "%Y-%m-%d")
-                    end_dt = datetime.strptime(request.end_time, "%Y-%m-%d")
+                elif start_time != "string" and end_time != "string":
+                    start_dt = datetime.strptime(start_time, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_time, "%Y-%m-%d")
                     end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
                     query = query.where(
                         ReceiptItemsEN.create_time >= start_dt,
                         ReceiptItemsEN.create_time <= end_dt
                     )
-                    logger.info(f"Range query: {request.start_time} - {request.end_time}")
+                    logger.info(f"Range query: {start_time} - {end_time}")
 
                 # 分页查询
-                elif request.offset and request.limit:               
+                elif offset and limit:               
                     query = query.order_by(
                         ReceiptItemsEN.invoice_date.desc()
-                    ).offset(request.offset).limit(request.limit)
+                    ).offset(offset).limit(limit)
 
                 # 默认查询上个月
                 else:
@@ -150,34 +128,33 @@ async def get_receipt(request: GetReceiptRequest):
 
         logger.info(f"Query completed: {len(decrypted_result)} records")
         return decrypted_result
-
-    except Exception as e:
-        logger.exception(f"Failed to retrieve receipts: {str(e)}")
-        return {"error": f"Failed to retrieve receipts: {str(e)}", "status": "error"}
-
-
-# ========== 更新接口 ==========
-
-@router.post("/update-receipt-items")
-@timer("update_receipt_items")
-async def update_receipt(request: UpdateReceiptRequest):
-    """根据record_id和user_id更新收据信息接口"""
-    logger.info(f"Updating receipt: ind={request.ind}, user_id={request.user_id}")
     
-    try:
-        # 构建更新数据
-        update_data = {}
-        for field, value in request.dict(exclude={'ind', 'user_id'}).items():
-            if value != "string" and value:
-                update_data[field] = value
+    @staticmethod
+    async def update_receipt(
+        ind: int,
+        user_id: str,
+        update_fields: Dict
+    ) -> Dict:
+        """
+        更新收据信息
         
-        if not update_data:
+        Args:
+            ind: 记录 ID
+            user_id: 用户 ID
+            update_fields: 要更新的字段
+            
+        Returns:
+            更新结果
+        """
+        logger.info(f"Updating receipt: ind={ind}, user_id={user_id}")
+        
+        if not update_fields:
             return {"message": "No data to update", "status": "success"}
         
-        logger.info(f"Fields to update: {list(update_data.keys())}")
+        logger.info(f"Fields to update: {list(update_fields.keys())}")
         
         # 加密敏感字段
-        encrypted_update_data = encrypt_data("receipt_items_en", update_data)
+        encrypted_update_data = encrypt_data("receipt_items_en", update_fields)
         
         # 执行更新
         async with measure_time("database_update"):
@@ -185,8 +162,8 @@ async def update_receipt(request: UpdateReceiptRequest):
                 result = await session.execute(
                     update(ReceiptItemsEN)
                     .where(and_(
-                        ReceiptItemsEN.ind == request.ind,
-                        ReceiptItemsEN.user_id == request.user_id
+                        ReceiptItemsEN.ind == ind,
+                        ReceiptItemsEN.user_id == user_id
                     ))
                     .values(**encrypted_update_data)
                     .returning(ReceiptItemsEN)
@@ -201,7 +178,7 @@ async def update_receipt(request: UpdateReceiptRequest):
         decrypted_result = await asyncio.gather(
             *[process_record(r, "receipt_items_en") for r in updated_records]
         )
-       
+        
         logger.info(f"Successfully updated {len(updated_records)} record(s)")
         return {
             "message": "Receipt updated successfully", 
@@ -209,41 +186,61 @@ async def update_receipt(request: UpdateReceiptRequest):
             "data": decrypted_result,
             "status": "success"
         }
-        
-    except Exception as e:
-        logger.exception(f"Failed to update receipt: {str(e)}")
-        return {"error": f"Failed to update receipt: {str(e)}", "status": "error"}
-
-
-# ========== 文件更新接口 ==========
-
-@router.post("/update-file-url")
-@timer("update_file_url")
-async def update_file_url(
-    user_id: str = Form(...),
-    ind: int = Form(...),
-    file: UploadFile = File(...)
-):
-    """上传新文件到 Storage，并更新数据库里的加密 file_url"""
-    storage_client = get_async_storage_client()
     
-    try:
+    @staticmethod
+    async def update_file_url(
+        user_id: str,
+        ind: int,
+        file: UploadFile
+    ) -> Dict:
+        """
+        上传新文件并更新 file_url
+        
+        Args:
+            user_id: 用户 ID
+            ind: 记录 ID
+            file: 上传的文件
+            
+        Returns:
+            更新结果
+        """
+        storage_client = get_async_storage_client()
+
         logger.info(f"Uploading new file for user_id={user_id}, ind={ind}")
         
-        # 异步上传到 Storage
+        # 1. 查询旧记录
+        async with AsyncSessionLocal() as session:
+            record_result = await session.execute(
+                select(ReceiptItemsEN.file_url)
+                .where(and_(
+                    ReceiptItemsEN.user_id == user_id,
+                    ReceiptItemsEN.ind == ind
+                ))
+            )
+            record_data = record_result.first()
+        
+        if not record_data:
+            return {"error": "Record not found", "status": "error"}
+
+        old_file_url = None
+        try:
+            old_file_url = decrypt_value(record_data[0])
+        except Exception as e:
+            logger.warning(f"Failed to decrypt old URL: {e}")
+        
+        # 2. 异步上传到 Storage
         async with measure_time("file_upload"):
             result = await upload_files_to_supabase_async(user_id, [file])
             storage_path = result.get(file.filename)
         
         if not storage_path:
-            raise HTTPException(status_code=500, detail="File upload failed")
+            return {"error": "File upload failed", "status": "error"}
 
         logger.info(f"File uploaded to: {storage_path}")
 
-        # 加密存储路径
-        encrypted_path = encrypt_data("receipt_items_en", {"file_url": storage_path})["file_url"]
+        # 3. 加密存储路径并更新数据库
+        encrypted_path = encrypt_value(storage_path)
 
-        # 更新数据库
         async with measure_time("database_update"):
             async with AsyncSessionLocal() as session:
                 result = await session.execute(
@@ -259,9 +256,14 @@ async def update_file_url(
                 update_result_data = result.scalars().all()
 
         if not update_result_data:
-            raise HTTPException(status_code=404, detail="Record not found")
+            return {"error": "Database update failed", "status": "error"}
 
-        # 生成签名 URL
+        # 4. 异步删除旧文件
+        if old_file_url:
+            asyncio.create_task(storage_client.delete([old_file_url]))
+            logger.info(f"Scheduled deletion of old file: {old_file_url}")
+
+        # 5. 生成签名 URL
         async with measure_time("generate_signed_url"):
             signed_url = await storage_client.create_signed_url(storage_path, expires_in=86400)
             if not signed_url:
@@ -274,22 +276,25 @@ async def update_file_url(
             "ind": ind,
             "download_url": signed_url,
         }
-
-    except Exception as e:
-        logger.exception(f"update_file_url failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ========== 删除接口 ==========
-
-@router.delete("/delete-receipt-items")
-@timer("delete_receipt_items")
-async def delete_receipt(request: DeleteReceiptRequest):
-    """根据 ind 和 user_id 批量删除收据信息和 storage 文件"""
-    logger.info(f"Deleting receipts for user_id: {request.user_id}, inds: {request.inds}")
     
-    try:
-        if not request.inds:
+    @staticmethod
+    async def delete_receipts(
+        user_id: str,
+        inds: List[int]
+    ) -> Dict:
+        """
+        批量删除收据记录
+        
+        Args:
+            user_id: 用户 ID
+            inds: 要删除的记录 ID 列表
+            
+        Returns:
+            删除结果
+        """
+        logger.info(f"Deleting receipts for user_id: {user_id}, inds: {inds}")
+    
+        if not inds:
             return {"error": "ind list cannot be empty", "status": "error"}
         
         storage_client = get_async_storage_client()
@@ -300,8 +305,8 @@ async def delete_receipt(request: DeleteReceiptRequest):
                 receipt_query_result = await session.execute(
                     select(ReceiptItemsEN.id, ReceiptItemsEN.ind, ReceiptItemsEN.file_url)
                     .where(and_(
-                        ReceiptItemsEN.user_id == request.user_id,
-                        ReceiptItemsEN.ind.in_(request.inds)
+                        ReceiptItemsEN.user_id == user_id,
+                        ReceiptItemsEN.ind.in_(inds)
                     ))
                 )
                 records = receipt_query_result.all()
@@ -340,11 +345,7 @@ async def delete_receipt(request: DeleteReceiptRequest):
             for record in records:
                 if record.file_url:
                     try:
-                        decrypted_url = decrypt_data(
-                            "receipt_items_en",
-                            {"file_url": record.file_url}
-                        ).get("file_url")
-                        
+                        decrypted_url = decrypt_value(record.file_url)                        
                         if decrypted_url:
                             delete_tasks.append((decrypted_url, record.file_url))
                     except Exception as e:
@@ -363,7 +364,7 @@ async def delete_receipt(request: DeleteReceiptRequest):
                     failed_files.extend(paths_to_delete)
         
         # 检查未找到的记录
-        not_found_inds = list(set(request.inds) - set(found_inds))
+        not_found_inds = list(set(inds) - set(found_inds))
         
         response_data = {
             "message": "Records deleted successfully",
@@ -380,7 +381,3 @@ async def delete_receipt(request: DeleteReceiptRequest):
         
         return response_data
         
-    except Exception as e:
-        logger.exception(f"Failed to delete receipts: {str(e)}")
-        return {"error": f"Failed to delete receipts: {str(e)}", "status": "error"}
-

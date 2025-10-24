@@ -11,10 +11,10 @@ from core.database import close_db
 from ses_eml_save.routers import router as ses_eml_save_routers
 from rcpdro_web_save.routers import router as rcpdro_web_save_routers
 from summary_download.routers import router as summary_download_routers
-from table_processor.receipt_items_en_router import router as receipt_items_en_routers
-from table_processor.receipt_summary_zip_en_router import router as receipt_summary_zip_en_routers
-from table_processor.ses_eml_info_en_router import router as ses_eml_info_en_routers
-from table_processor.receipt_items_en_upload_result_router import router as receipt_items_en_upload_result_routers
+from table_processor.receipt_items_en.router import router as receipt_items_en_routers
+from table_processor.receipt_summary_zip_en.router import router as receipt_summary_zip_en_routers
+from table_processor.ses_eml_info_en.router import router as ses_eml_info_en_routers
+from table_processor.receipt_items_en_upload_result.router import router as receipt_items_en_upload_result_routers
 from table_processor.subscription_records.router import router as subscription_records_routers
 
 # 创建 logs 目录
