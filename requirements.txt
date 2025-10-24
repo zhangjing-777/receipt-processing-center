@@ -21,3 +21,4 @@ httpx
 psutil
 pillow-heif
 Pillow
+pandas

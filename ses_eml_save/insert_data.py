@@ -1,9 +1,10 @@
 import uuid
+import logging
 import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, Any
 from core.utils import clean_and_parse_json
-import logging
+from core.canonicalization import normalize_subscription_fields
 
 
 logger = logging.getLogger(__name__)
@@ -92,48 +93,49 @@ class SubscriptDataPreparer:
         self.source = source
         self.fields = clean_and_parse_json(fields)
 
-    def determine_status(self) -> str:
-        """根据字段确定订阅状态"""
-        end_date = self.fields.get("end_date")
-        
-        if end_date:
-            end = datetime.fromisoformat(end_date).date()
-            if end < (datetime.now().date() - timedelta(days=31)):
-                return "expired"
-        
-        return "active"
-
-    def build_subscript_data(self) -> Dict[str, Any]:
+    async def build_subscript_data(self) -> Dict[str, Any]:
         logger.info("Building subscript data dictionary.")
         try:
-            # 生成 hash_id，识别同期订阅
+            # 1. 规范化字段
+            normalized = await normalize_subscription_fields(
+                {
+                    'buyer_name': self.fields.get("buyer_name", ""),
+                    'seller_name': self.fields.get("seller_name", ""),
+                    'plan_name': self.fields.get("plan_name", ""),
+                    'currency': self.fields.get("currency", "USD"),
+                    'amount': self.fields.get("amount", 0)
+                },
+                self.user_id
+            )
+            
+            # 2. 生成 hash_id（使用规范化后的字段）
             hash_input = "|".join([
                 str(self.user_id),
-                str(self.fields.get("buyer_name", "")),
-                str(self.fields.get("seller_name", "")),
-                str(self.fields.get("plan_name", "")),
-                str(self.fields.get("currency", "USD")),
-                str(self.fields.get("amount", 0))
+                str(normalized['buyer_name']),
+                str(normalized['seller_name']),
+                str(normalized['plan_name']),
+                str(normalized['currency']),
+                str(normalized['amount'])
             ])
-
             chain_key_bidx = hashlib.md5(hash_input.encode()).hexdigest()
-            
+
+            # 3. 构建数据
             data = {
                 "id": RECORD_ID,
                 "user_id": self.user_id,
-                "buyer_name": self.fields.get("buyer_name", ""),
-                "seller_name": self.fields.get("seller_name", ""),
-                "plan_name": self.fields.get("plan_name", ""),
+                "buyer_name": normalized['buyer_name'],
+                "seller_name": normalized['seller_name'],
+                "plan_name": normalized['plan_name'],
                 "billing_cycle": self.fields.get("billing_cycle", "monthly"),
-                "amount": self.fields.get("amount", 0),
-                "currency": self.fields.get("currency", "USD"),
+                "amount": normalized['amount'],
+                "currency": normalized['currency'],
                 "start_date": self.fields.get("start_date"),
                 "next_renewal_date": self.fields.get("next_renewal_date"),
                 "end_date": self.fields.get("end_date"),
-                "status": self.determine_status(),
                 "source": self.source,
                 "note": self.fields.get("note"),
                 "chain_key_bidx": chain_key_bidx,
+                "canonical_id": normalized.get('canonical_id'),
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }

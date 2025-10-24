@@ -186,7 +186,7 @@ async def process_single_file(filename: str, public_url: str, user_id: str, raw_
             if extracted.get("is_subscription"):
                 is_subscription = True
                 sub_pre = SubscriptDataPreparer(extracted.get("subscription_fields"), user_id, "email")
-                subscript_row = sub_pre.build_subscript_data()
+                subscript_row = await sub_pre.build_subscript_data()
                 encrypted_subscript_row = encrypt_data("subscription_records", subscript_row) 
                 async with AsyncSessionLocal() as session:
                     await session.execute(

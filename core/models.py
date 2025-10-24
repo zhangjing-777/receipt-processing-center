@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Text, DateTime as SQLDateTime, BigInteger, Numeric, TypeDecorator, Date as SQLDate, Integer
+from sqlalchemy import Column, Text, DateTime as SQLDateTime, BigInteger, Numeric, TypeDecorator, Date as SQLDate, Integer, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime, date
 import uuid
@@ -108,10 +108,10 @@ class SubscriptionRecords(Base):
     start_date = Column(AutoConvertDate, index=True)
     next_renewal_date = Column(AutoConvertDate)
     end_date = Column(AutoConvertDate)
-    status = Column(Text, default="active", index=True)
     source = Column(Text)
     note = Column(Text)
     chain_key_bidx = Column(Text, index=True)  # 订阅链哈希索引
+    canonical_id = Column(Integer, index=True) # 关联canonical_entities表id
     created_at = Column(AutoConvertDateTime, default=datetime.utcnow)  # 🔥 使用自定义类型
     updated_at = Column(AutoConvertDateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # 🔥 使用自定义类型
 
@@ -154,3 +154,30 @@ class ReceiptUsageQuotaRequestEN(Base):
     last_reset_date = Column(AutoConvertDate)
     email = Column(Text)
     remark = Column(Text)
+
+class CanonicalEntities(Base):
+    __tablename__ = "canonical_entities"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    
+    # 规范化字段
+    canonical_buyer_name = Column(Text, nullable=False)
+    canonical_seller_name = Column(Text, nullable=False)
+    canonical_plan_name = Column(Text, nullable=False)
+    canonical_currency = Column(Text, nullable=False)
+    canonical_amount = Column(Numeric(10, 2), nullable=False)
+    
+    # 匹配键
+    normalized_key = Column(Text, nullable=False)
+    
+    # 统计
+    match_count = Column(Integer, default=1)
+    last_matched_at = Column(AutoConvertDateTime)
+    
+    # 管理
+    is_active = Column(Boolean, default=True)  # SQLite 兼容，1=True, 0=False
+    notes = Column(Text)
+    
+    created_at = Column(AutoConvertDateTime, default=datetime.utcnow)
+    updated_at = Column(AutoConvertDateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

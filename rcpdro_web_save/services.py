@@ -70,7 +70,7 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
                     user_id,
                     "web"
                 )
-                sub_row = sub_preparer.build_subscript_data()
+                sub_row = await sub_preparer.build_subscript_data()
                 encrypted_sub = encrypt_data("subscription_records", sub_row)
                 subscription_records.append(encrypted_sub)
         
