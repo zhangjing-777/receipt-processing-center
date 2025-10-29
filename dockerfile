@@ -5,7 +5,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 安装必要工具（playwright 依赖）
-RUN apt-get update && apt-get install -y wget gnupg curl libglib2.0-0 libnss3 libgdk-pixbuf2.0-0 libgtk-3-0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2 libxshmfence1 xvfb
+RUN apt-get update && apt-get install -y wget gnupg curl libglib2.0-0 libnss3 libgdk-pixbuf-xlib-2.0-0 libgtk-3-0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2 libxshmfence1 xvfb
 
 # 拷贝依赖
 COPY requirements.txt .

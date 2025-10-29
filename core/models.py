@@ -139,9 +139,11 @@ class ReceiptUsageQuotaReceiptEN(Base):
     user_id = Column(UUID(as_uuid=True), primary_key=True)
     created_at = Column(AutoConvertDateTime, default=datetime.utcnow)  # 🔥 使用自定义类型
     month_limit = Column(Integer)
+    raw_limit = Column(Integer)
     used_month = Column(Integer, default=0)
     last_reset_date = Column(AutoConvertDate)
     email = Column(Text)
+    email_hash = Column(Text)
     remark = Column(Text)
 
 class ReceiptUsageQuotaRequestEN(Base):
@@ -150,9 +152,11 @@ class ReceiptUsageQuotaRequestEN(Base):
     user_id = Column(UUID(as_uuid=True), primary_key=True)
     created_at = Column(AutoConvertDateTime, default=datetime.utcnow)  # 🔥 使用自定义类型
     month_limit = Column(Integer)
+    raw_limit = Column(Integer)
     used_month = Column(Integer, default=0)
     last_reset_date = Column(AutoConvertDate)
     email = Column(Text)
+    email_hash = Column(Text)
     remark = Column(Text)
 
 class CanonicalEntities(Base):

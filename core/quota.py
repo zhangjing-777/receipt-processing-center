@@ -15,6 +15,7 @@ class QuotaManager:
         self.table = table
         self.used_month = 0
         self.month_limit = 0
+        self.raw_limit = 0
         self.model = (
             ReceiptUsageQuotaReceiptEN 
             if table == "receipt_usage_quota_receipt_en" 
@@ -66,8 +67,9 @@ class QuotaManager:
             else:
                 self.used_month = quota_data.used_month
 
-            self.month_limit = quota_data.month_limit
-            allowed = self.used_month < self.month_limit
+            self.month_limit = quota_data.month_limit 
+            self.raw_limit = quota_data.raw_limit
+            allowed = self.used_month < (self.month_limit+self.raw_limit)
 
             if not allowed:
                 remark = "⚠️ You have reached your month usage limit. Please try next period or upgrade your plan for more quota."
@@ -79,7 +81,7 @@ class QuotaManager:
                 await session.commit()
                 raise ValueError(remark)
 
-            logger.info(f"Quota check - user_id: {self.user_id}, used: {self.used_month}/{self.month_limit}")
+            logger.info(f"Quota check - user_id: {self.user_id}, used: {self.used_month}/({self.month_limit}+{self.raw_limit})")
 
     async def increment_usage(self, success_count: int):
         """
@@ -88,18 +90,20 @@ class QuotaManager:
         Args:
             success_count: 成功处理的数量
         """
-        new_used = self.used_month + success_count
+        remain_raw = max(self.raw_limit-success_count, 0)
+        new_used = self.used_month - min(self.raw_limit-success_count, 0)
         
         async with AsyncSessionLocal() as session:
             await session.execute(
                 update(self.model)
                 .where(self.model.user_id == self.user_id)
-                .values(used_month=new_used)
+                .values(used_month=new_used, raw_limit=remain_raw)
             )
             await session.commit()
             
         self.used_month = new_used
-        logger.info(f"Quota updated - user_id: {self.user_id}, new usage: {self.used_month}/{self.month_limit}")
+        self.raw_limit = remain_raw
+        logger.info(f"Quota updated - user_id: {self.user_id}, new usage: {self.used_month}/({self.month_limit}+{self.raw_limit})")
     
     async def get_remaining(self) -> int:
         """
@@ -108,7 +112,7 @@ class QuotaManager:
         Returns:
             剩余可用次数
         """
-        return max(0, self.month_limit - self.used_month)
+        return max(0, self.month_limit+self.raw_limit - self.used_month)
     
     async def get_usage_percentage(self) -> float:
         """
@@ -117,6 +121,6 @@ class QuotaManager:
         Returns:
             使用百分比 (0-100)
         """
-        if self.month_limit == 0:
+        if self.month_limit+self.raw_limit == 0:
             return 0.0
-        return (self.used_month / self.month_limit) * 100
+        return (self.used_month / (self.month_limit+self.raw_limit)) * 100
