@@ -96,12 +96,14 @@ async def upload_single_file(
             await file.seek(0)
             return (original_filename, storage_path)
         else:
-            logger.warning(f"❌ Upload failed for {original_filename}: {result.get('error')}")
-            return (original_filename, "")
+            error_msg = result.get('error', 'Unknown error')
+            logger.error(f"❌ Upload failed for {original_filename}: {error_msg}")
+            logger.error(f"Full result: {result}")
+            raise Exception(f"Upload failed for {original_filename}: {error_msg}")
             
     except Exception as e:
         logger.exception(f"Exception uploading {file.filename}: {e}")
-        return (file.filename, "")
+        raise Exception(f"Upload failed for {original_filename}: {error_msg}")
 
 async def upload_files_to_supabase_async(
     user_id: str,

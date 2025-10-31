@@ -397,6 +397,9 @@ async def ocr_image_from_storage(storage_path):
 
 async def ocr_attachment(file_path_or_url: str) -> str:
     """异步 OCR 入口函数"""
+    if not file_path_or_url or not file_path_or_url.strip():
+        raise ValueError(f"Empty file path for OCR: {file_path_or_url}")
+    
     logger.info(f"Starting OCR for attachment: {file_path_or_url}")
     try:
         # 判断是存储路径还是完整 URL

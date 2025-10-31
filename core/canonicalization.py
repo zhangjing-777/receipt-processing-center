@@ -51,13 +51,12 @@ def generate_normalized_key(
     hash_input = "|".join([buyer, seller, plan, currency, amount_str])
     return hashlib.md5(hash_input.encode()).hexdigest()
     
-
 async def normalize_subscription_fields(
     raw_data: Dict,
     user_id: str
 ) -> Dict:
     """
-    规范化订阅字段（带缓存）
+    规范化订阅字段（带缓存 + 模糊匹配 + UPSERT）
     
     Args:
         raw_data: 原始字段 dict，必须包含：
@@ -71,6 +70,8 @@ async def normalize_subscription_fields(
     Returns:
         规范化后的字段 dict（可能与原始相同）
     """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    
     logger.info(f"Normalizing subscription for user: {user_id}")
     
     # 1. 生成 normalized_key
@@ -95,51 +96,7 @@ async def normalize_subscription_fields(
     except Exception as e:
         logger.warning(f"Cache read failed: {e}")
     
-    # 3. 精确匹配
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(CanonicalEntities).where(
-                CanonicalEntities.user_id == user_id,
-                CanonicalEntities.normalized_key == normalized_key,
-                CanonicalEntities.is_active == True
-            )
-        )
-        canonical = result.scalar_one_or_none()
-        
-        if canonical:
-            logger.info(f"Exact match found (canonical_id={canonical.id})")
-            
-            # 更新统计（异步，不阻塞）
-            await session.execute(
-                update(CanonicalEntities)
-                .where(CanonicalEntities.id == canonical.id)
-                .values(
-                    match_count=CanonicalEntities.match_count + 1,
-                    last_matched_at=datetime.utcnow()
-                )
-            )
-            await session.commit()
-            
-            # 缓存结果
-            cache_data = {
-                'match_type': 'exact',
-                'canonical_id': canonical.id,
-                **raw_data
-            }
-            try:
-                await redis_client.setex(
-                    cache_key,
-                    CACHE_TTL,
-                    json.dumps(cache_data, default=str)
-                )
-            except Exception as e:
-                logger.warning(f"Cache write failed: {e}")
-            
-            return {**raw_data, 'canonical_id': canonical.id}
-        
-    # 4. 模糊匹配
-    logger.info("Attempting fuzzy match...")
-    
+    # 3. 模糊匹配：查找相似的 normalized_key
     async with AsyncSessionLocal() as session:
         fuzzy_result = await session.execute(
             select(
@@ -160,23 +117,19 @@ async def normalize_subscription_fields(
         
         fuzzy_match = fuzzy_result.first()
     
+    # 4. 如果模糊匹配成功，使用已有的 normalized_key
+    final_normalized_key = normalized_key
+    use_existing_canonical = False
+    
     if fuzzy_match:
         similar, score = fuzzy_match[0], fuzzy_match[1]
         logger.info(f"Fuzzy match found (canonical_id={similar.id}, score={score:.3f})")
         
-        # 更新统计
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                update(CanonicalEntities)
-                .where(CanonicalEntities.id == similar.id)
-                .values(
-                    match_count=CanonicalEntities.match_count + 1,
-                    last_matched_at=datetime.utcnow()
-                )
-            )
-            await session.commit()
+        # 使用已存在的 normalized_key，确保插入到同一规范记录
+        final_normalized_key = similar.normalized_key
+        use_existing_canonical = True
         
-        # 返回规范字段
+        # 返回规范化字段（从已存在记录）
         normalized_data = {
             'buyer_name': decrypt_value(similar.canonical_buyer_name),
             'seller_name': decrypt_value(similar.canonical_seller_name),
@@ -185,62 +138,68 @@ async def normalize_subscription_fields(
             'amount': float(similar.canonical_amount),
             'canonical_id': similar.id
         }
-        
-        # 缓存结果
-        cache_data = {
-            'match_type': 'fuzzy',
-            'score': float(score),
-            **normalized_data
-        }
-        try:
-            await redis_client.setex(
-                cache_key,
-                CACHE_TTL,
-                json.dumps(cache_data, default=str)
-            )
-        except Exception as e:
-            logger.warning(f"Cache write failed: {e}")
-        
-        return normalized_data
+    else:
+        logger.info("No fuzzy match found, will create/update with original key")
+        # 使用原始数据
+        normalized_data = raw_data.copy()
     
-    # 5. 无匹配 - 创建新规则
-    logger.info("No match found, creating new canonical entity")
-    
+    # 5. UPSERT：插入或更新（原子操作，无竞态条件）
     async with AsyncSessionLocal() as session:
-        new_canonical_result = await session.execute(
-            insert(CanonicalEntities).values(
+        try:
+            stmt = pg_insert(CanonicalEntities).values(
                 user_id=user_id,
-                canonical_buyer_name=encrypt_value(raw_data.get('buyer_name', '')),
-                canonical_seller_name=encrypt_value(raw_data.get('seller_name', '')),
-                canonical_plan_name=encrypt_value(raw_data.get('plan_name', '')),
-                canonical_currency=raw_data.get('currency', 'USD'),
-                canonical_amount=Decimal(str(raw_data.get('amount', 0))),
-                normalized_key=normalized_key,
+                canonical_buyer_name=encrypt_value(normalized_data.get('buyer_name', '')),
+                canonical_seller_name=encrypt_value(normalized_data.get('seller_name', '')),
+                canonical_plan_name=encrypt_value(normalized_data.get('plan_name', '')),
+                canonical_currency=normalized_data.get('currency', 'USD'),
+                canonical_amount=Decimal(str(normalized_data.get('amount', 0))),
+                normalized_key=final_normalized_key,
                 match_count=1,
-                last_matched_at=datetime.utcnow()
+                last_matched_at=datetime.utcnow(),
+                is_active=True,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            ).on_conflict_do_update(
+                index_elements=['normalized_key'],  # 基于唯一约束
+                set_={
+                    'match_count': CanonicalEntities.match_count + 1,
+                    'last_matched_at': datetime.utcnow(),
+                    'updated_at': datetime.utcnow()
+                }
             ).returning(CanonicalEntities.id)
-        )
-        await session.commit()
+            
+            result = await session.execute(stmt)
+            await session.commit()
+            
+            canonical_id = result.scalar_one()
+            logger.info(f"UPSERT completed (canonical_id={canonical_id})")
+            
+        except Exception as e:
+            await session.rollback()
+            logger.exception(f"UPSERT failed: {e}")
+            raise
     
-        new_canonical_id = new_canonical_result.scalar_one()
-        logger.info(f"Created new canonical entity (id={new_canonical_id})")
+    # 6. 准备返回数据
+    normalized_data['canonical_id'] = canonical_id
     
-    # 缓存结果
+    # 7. 缓存结果
     cache_data = {
-        'match_type': 'exact',
-        'canonical_id': new_canonical_id,
-        **raw_data
+        'match_type': 'fuzzy' if use_existing_canonical else 'exact',
+        'canonical_id': canonical_id,
+        **normalized_data
     }
+    
     try:
         await redis_client.setex(
             cache_key,
             CACHE_TTL,
             json.dumps(cache_data, default=str)
         )
+        logger.info(f"Cached result for {normalized_key}")
     except Exception as e:
         logger.warning(f"Cache write failed: {e}")
     
-    return {**raw_data, 'canonical_id': new_canonical_id}
+    return normalized_data
 
 
 async def invalidate_canonical_cache(user_id: str, normalized_key: str = None):
