@@ -91,8 +91,8 @@ class ReceiptItemsENService:
                     end_dt = datetime.strptime(end_time, "%Y-%m-%d")
                     end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
                     query = query.where(
-                        ReceiptItemsEN.create_time >= start_dt,
-                        ReceiptItemsEN.create_time <= end_dt
+                        ReceiptItemsEN.invoice_date >= start_dt,
+                        ReceiptItemsEN.invoice_date <= end_dt
                     )
                     logger.info(f"Range query: {start_time} - {end_time}")
 

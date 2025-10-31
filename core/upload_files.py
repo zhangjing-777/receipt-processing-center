@@ -80,7 +80,7 @@ async def upload_single_file(
         
         # 生成安全路径
         date_url = datetime.utcnow().date().isoformat()
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
         storage_path = f"{file_type}/{user_id}/{date_url}/{timestamp}_{safe_filename}"
         
         # 异步上传

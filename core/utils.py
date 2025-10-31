@@ -7,40 +7,60 @@ import logging
 from typing import Any, Dict
 
 
-
 logger = logging.getLogger(__name__)
 
 def make_safe_storage_path(filename: str, prefix: str = "") -> str:
+    """
+    生成安全的 Supabase 存储文件路径（保留原逻辑 + 新增 ASCII 安全兜底）：
+    1. 保留原有拼音转换、hash 截断等逻辑
+    2. 最后增加 NFKD 去重音符（如 å → a）、去 emoji、仅保留 ASCII 安全字符
+    """
     logger.info(f"Sanitizing filename: {filename}")
-    # 1. 去除不可见字符 + 正规化为 NFC
+    if not filename:
+        return "file_unknown"
+
+    # 1️⃣ 去除不可见字符 + 正规化
     filename = unicodedata.normalize("NFKC", filename)
 
-    # 2. 中文转拼音（只保留文件主名，后缀不处理）
+    # 2️⃣ 拆分主名和扩展名
     if "." in filename:
         name_part, ext = filename.rsplit(".", 1)
     else:
         name_part, ext = filename, ""
 
-    # 转为拼音（如：'天翔迪晟（深圳）发票' → 'tianxiangdisheng_shenzhen_fapiao'）
-    pinyin_name = "_".join(lazy_pinyin(name_part))
+    # 3️⃣ 中文转拼音（不改后缀）
+    try:
+        pinyin_name = "_".join(lazy_pinyin(name_part))
+    except Exception:
+        pinyin_name = name_part  # fallback
 
-    # 3. 保留英文、数字、下划线、短横线和点，移除非法字符
+    # 4️⃣ 保留合法字符
     pinyin_name = re.sub(r"[^\w.-]", "_", pinyin_name)
     ext = re.sub(r"[^\w]", "", ext)
 
-    # 4. 限长 + 防重复 hash
+    # 5️⃣ 长度限制 + hash 后缀
     if len(pinyin_name) > 80:
         hash_suffix = hashlib.md5(filename.encode()).hexdigest()[:8]
         pinyin_name = pinyin_name[:70] + "_" + hash_suffix
 
-    # 5. 组装最终文件名
-    final_filename = f"{pinyin_name}.{ext}" if ext else pinyin_name
+    # 🔹 6️⃣ 新增 ASCII 安全兜底（去除 å、é 等非 ASCII）
+    def to_ascii_safe(s: str) -> str:
+        s = unicodedata.normalize("NFKD", s)
+        s = s.encode("ascii", "ignore").decode("ascii")
+        return re.sub(r"[^A-Za-z0-9_.-]", "_", s)
 
-    # 6. 可选前缀路径（如 '2025-06-23'）
+    safe_name = to_ascii_safe(pinyin_name)
+    safe_ext = to_ascii_safe(ext)
+
+    # 7️⃣ 组装最终文件名
+    final_filename = f"{safe_name}.{safe_ext}" if safe_ext else safe_name
+
+    # 8️⃣ 可选前缀路径
     if prefix:
         result = f"{prefix}/{final_filename}"
     else:
         result = final_filename
+
     logger.info(f"Sanitized filename result: {result}")
     return result
 

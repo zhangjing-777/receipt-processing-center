@@ -44,7 +44,7 @@ async def upload_single_attachment(
             logger.info(f"Binary data already in bytes format, size: {len(binary_data)} bytes")
 
         date_url = datetime.utcnow().date().isoformat()
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
         storage_path = f"save/{user_id}/{date_url}/{timestamp}_{safe_filename}"
         logger.info(f"Generated storage path: {storage_path}")
 
