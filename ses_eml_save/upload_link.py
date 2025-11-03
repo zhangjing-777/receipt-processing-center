@@ -1,6 +1,8 @@
 import uuid
 import logging
 import asyncio
+import re
+from urllib.parse import unquote
 from typing import List, Dict
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -11,21 +13,58 @@ from core.supabase_storage import get_async_storage_client
 logger = logging.getLogger(__name__)
 
 
-def extract_pdf_invoice_urls(html: str) -> List[str]:
+def extract_pdf_invoice_urls(content: str) -> List[str]:
     """
-    从 HTML 中提取 PDF 发票链接 (同步，因为只是解析)
+    从邮件内容中提取 PDF 发票链接（支持 HTML 和纯文本格式）
     
     Args:
-        html: HTML 内容
+        content: 邮件内容（HTML 或纯文本）
         
     Returns:
         PDF 链接列表
     """
-    logger.info("Extracting PDF invoice URLs from HTML content")
-    soup = BeautifulSoup(html, "html.parser")
-    links = soup.find_all("a", string=lambda text: text and "Download PDF invoice" in text)
-    urls = [link["href"] for link in links if link.has_attr("href")]
-    logger.info(f"Found {len(urls)} PDF invoice URLs")
+    logger.info("Extracting PDF invoice URLs from email content")
+    urls = []
+    
+    # 方法1: 尝试作为 HTML 解析
+    try:
+        soup = BeautifulSoup(content, "html.parser")
+        links = soup.find_all("a", string=lambda text: text and "Download PDF invoice" in text)
+        urls.extend([link["href"] for link in links if link.has_attr("href")])
+    except Exception as e:
+        logger.debug(f"HTML parsing failed or no results: {e}")
+    
+    # 方法2: 使用正则表达式提取所有 URL（适用于纯文本）
+    if not urls:
+        # 匹配发票相关的 URL 模式
+        # Bolt 的发票 URL 通常包含 'invoice' 关键字
+        url_pattern = r'https?://[^\s<>"\'\)]+invoice[^\s<>"\'\)]*'
+        found_urls = re.findall(url_pattern, content, re.IGNORECASE)
+        
+        # 清理 URL（移除可能的尾部标点符号）
+        cleaned_urls = []
+        for url in found_urls:
+            # 移除常见的尾部字符
+            url = url.rstrip('.,;:!?')
+            # 移除 AWS tracking 包装（如果存在）
+            if 'awstrack.me' in url:
+                # 提取 L0/ 后面的实际 URL
+                match = re.search(r'L0/(https?[^/]+.*?)(?:/\d+/|$)', url)
+                if match:
+                    # URL 解码
+                    actual_url = match.group(1).replace('%2F', '/').replace('%3F', '?').replace('%3D', '=')
+                    cleaned_urls.append(actual_url)
+                else:
+                    cleaned_urls.append(url)
+            else:
+                cleaned_urls.append(url)
+        
+        urls.extend(cleaned_urls)
+    
+    # 去重并记录
+    urls = list(dict.fromkeys(urls))  # 保持顺序的去重
+    logger.info(f"Found {len(urls)} PDF invoice URL(s)")
+    
     return urls
 
 
