@@ -108,7 +108,8 @@ class AsyncSupabaseStorage:
         
         try:
             logger.info(f"Deleting {len(paths)} file(s)")
-            response = await client.delete(
+            response = await client.request(
+                "DELETE",
                 url,
                 headers={**self.headers, "Content-Type": "application/json"},
                 json={"prefixes": paths}
