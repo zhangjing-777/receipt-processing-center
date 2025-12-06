@@ -2,6 +2,7 @@ import logging
 from typing import List
 from fastapi import APIRouter, UploadFile, HTTPException
 from core.quota import QuotaManager
+from core.send_push import send_push
 from rcpdro_web_save.services import upload_to_supabase
 
 
@@ -25,8 +26,16 @@ async def receiptdrop_transfer(user_id: str, files: List[UploadFile]):
             await quato_manager.increment_usage(success_count)
             logger.info("Update usage count successfully")
         
+        await send_push({
+            "user_id": user_id,
+            "notification_type": "single_success" if len(files)==1 else "batch_success"
+        })
         return status
     
     except Exception as e:
         logger.info(f"Error in upload_receipts: {str(e)}")
+        await send_push({
+            "user_id": user_id,
+            "notification_type": "failed"
+        })
         raise HTTPException(status_code=500, detail=str(e))

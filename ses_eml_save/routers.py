@@ -1,6 +1,7 @@
 import logging
 from fastapi import APIRouter, BackgroundTasks
 from core.quota import QuotaManager
+from core.send_push import send_push
 from ses_eml_save.services import upload_to_supabase
 
 logger = logging.getLogger(__name__)
@@ -35,8 +36,17 @@ async def process_email_task(bucket: str, key: str, user_id: str):
             await quato_manager.increment_usage(success_count)
             logger.info("Usage updated successfully")
 
+        await send_push({
+            "user_id": user_id,
+            "notification_type": "single_success"
+        })
         logger.info(f"✅ Finished processing email for user {user_id}: {status}")
 
     except Exception as e:
+        await send_push({
+            "user_id": user_id,
+            "notification_type": "failed"
+        })
         logger.exception(f"❌ Background process failed for user {user_id}: {str(e)}")
+        
 

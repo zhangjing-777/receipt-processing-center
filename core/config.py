@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     redis_port: str
     redis_password: str
     redis_db: str
+
+    push_url: str
     
     # ========== Phase 2 新增配置 ==========
     
