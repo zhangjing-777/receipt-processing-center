@@ -218,3 +218,102 @@ def render_summary(buyers_json: Dict) -> str:
 
     return "\n".join(output_parts)
 
+
+def render_summary_html(buyers_json: Dict) -> str:
+    """生成 HTML 格式的汇总报告（带交互式表格）"""
+    output_parts = []
+    
+    # 添加 CSS 样式
+    html_header = """
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h2 { color: #2c3e50; }
+        .summary-section { margin-bottom: 40px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th { background-color: #3498db; color: white; padding: 12px; text-align: left; }
+        td { border: 1px solid #ddd; padding: 10px; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        tr:hover { background-color: #e8f4f8; }
+        input[type="number"] { width: 80px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        .amount { font-weight: bold; color: #27ae60; }
+        .remarks { background-color: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin: 20px 0; }
+        .category-list { margin: 10px 0; }
+    </style>
+    <script>
+    function calculateAmount(rowId) {
+        const row = document.getElementById('row-' + rowId);
+        const total = parseFloat(row.querySelector('.total').textContent) || 0;
+        const rate = parseFloat(row.querySelector('.rate').value) || 0;
+        const amount = total * rate;
+        row.querySelector('.amount').textContent = amount.toFixed(2);
+    }
+    </script>
+    """
+    
+    output_parts.append(html_header)
+
+    for buyer, data in buyers_json.items():
+        part = []
+        part.append(f'<div class="summary-section">')
+        part.append(f'<h2>✅ Your business travel reimbursement summary for {buyer} has been generated:</h2>')
+
+        # Category totals
+        part.append('<div class="category-list">')
+        for cat, cur_map in data["totals_by_category"].items():
+            for cur, amt in cur_map.items():
+                part.append(f"<div>- {cat}: {format_currency(amt, cur)}</div>")
+        part.append('</div>')
+
+        # Totals by currency
+        part.append('<h3>Totals by currency:</h3>')
+        part.append('<div class="category-list">')
+        for cur, amt in data["totals_by_currency"].items():
+            part.append(f"<div>- {cur}: {format_currency(amt, cur)}</div>")
+        part.append('</div>')
+
+        # Remarks
+        part.append('<div class="remarks">')
+        part.append('<h3>Please copy the following description into the reimbursement remarks section:</h3>')
+        part.append('<p>During this business trip, the following expenses were incurred:</p>')
+
+        rows_by_cat = group_rows_by_category(data["rows"])
+        for cat, rows in rows_by_cat.items():
+            descs = describe_category(cat, rows, data["totals_by_category"][cat])
+            for desc in descs:
+                part.append(f'<p>{desc}</p>')
+
+        part.append('<p>All receipts have been attached. Please proceed with the review.</p>')
+        part.append('</div>')
+
+        # Table with interactive inputs
+        part.append(f'<h3>Please find the details for {buyer} below:</h3>')
+        part.append('<table>')
+        part.append('<thead><tr>')
+        headers = ["ID", "Invoice Date", "Category", "Seller", "Buyer", "Invoice Total", "Currency", "Target Rate", "Target Amount", "File URL"]
+        for header in headers:
+            part.append(f'<th>{header}</th>')
+        part.append('</tr></thead>')
+        part.append('<tbody>')
+
+        rows = sorted(data["rows"], key=lambda r: r["Invoice Date"])
+        for idx, r in enumerate(rows, start=1):
+            part.append(f'<tr id="row-{idx}">')
+            part.append(f'<td>{idx}</td>')
+            part.append(f'<td>{r["Invoice Date"]}</td>')
+            part.append(f'<td>{r["Category"]}</td>')
+            part.append(f'<td>{r["Seller"]}</td>')
+            part.append(f'<td>{r["Buyer"]}</td>')
+            part.append(f'<td class="total">{r["Invoice Total"]}</td>')
+            part.append(f'<td>{r["Currency"]}</td>')
+            part.append(f'<td><input type="number" class="rate" step="0.0001" placeholder="0.00" oninput="calculateAmount({idx})"></td>')
+            part.append(f'<td class="amount">0.00</td>')
+            part.append(f'<td><a href="{r["File URL"]}" target="_blank">View</a></td>')
+            part.append('</tr>')
+
+        part.append('</tbody>')
+        part.append('</table>')
+        part.append('</div>')
+
+        output_parts.append("\n".join(part))
+
+    return "\n".join(output_parts)

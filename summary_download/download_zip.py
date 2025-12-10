@@ -84,16 +84,7 @@ async def generate_download_zip(user_id: str, data: Dict) -> str:
     
     Args:
         user_id: 用户 ID
-        data: 文件组织结构
-              {
-                  buyer: {
-                      date: {
-                          category: {
-                              file_url: label
-                          }
-                      }
-                  }
-              }
+        data: 扁平化的文件字典 {file_url: label}
               
     Returns:
         存储路径
@@ -109,16 +100,9 @@ async def generate_download_zip(user_id: str, data: Dict) -> str:
 
     # 收集所有下载任务
     tasks = []
-    for buyer, date_dict in data.items():
-        for invoice_date, category_dict in date_dict.items():
-            for category, file_dict in category_dict.items():
-                for file_url, label in file_dict.items():
-                    buyer_s   = sanitize_component(buyer)
-                    date_s    = sanitize_component(invoice_date)
-                    category_s= sanitize_component(category)
-                    file_name = safe_filename(label, file_url)
-                    arcname   = "/".join((buyer_s, date_s, category_s, file_name))
-                    tasks.append(fetch_file(file_url, arcname))
+    for file_url, label in data.items():
+        file_name = safe_filename(label, file_url)
+        tasks.append(fetch_file(file_url, file_name))
 
     logger.info(f"Downloading {len(tasks)} files concurrently...")
     

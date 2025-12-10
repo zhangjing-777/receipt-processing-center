@@ -7,33 +7,31 @@ from core.encryption import encrypt_data
 from core.models import ReceiptSummaryZipEN
 from core.database import AsyncSessionLocal
 from core.supabase_storage import get_async_storage_client
-from core.config import settings
 from summary_download.download_zip import generate_download_zip
-from summary_download.normalizing import serialize_for_invoices, render_summary
+from summary_download.normalizing import serialize_for_invoices, render_summary_html
 
 logger = logging.getLogger(__name__)
 
 
 def group_invoices(invoices: List[Dict]) -> Dict:
-    """按买方、日期、类别分组发票"""
-    result = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    """生成扁平化的文件字典，文件名格式：{date}_{category}_{seller}_{total}_{currency}"""
+    result = {}
     
     for invoice in invoices:
-        buyer = invoice.get('buyer', 'Unknown_Buyer')
-        date = invoice.get('invoice_date', 'Unknown_Date')
-        category = invoice.get('category', 'Uncategorized')
-        file_url = invoice.get('file_url')
-        seller = invoice.get('seller', 'Unknown_Seller').replace(' ', '_')
-        total = invoice.get('invoice_total', '0.0')
+        date = invoice.get('invoice_date', 'Unknown_Date').replace('-', '')  # 20250901
+        category = invoice.get('category', 'Uncategorized').replace(' ', '_')
+        seller = invoice.get('seller', 'Unknown').replace(' ', '_')
+        total = str(invoice.get('invoice_total', '0')).replace('.', '_')
         currency = invoice.get('currency', 'UNK')
+        file_url = invoice.get('file_url')
         
         if not file_url:
             continue
-            
-        filename = f"{seller}_{total}_{currency}"
-        result[buyer][date][category][file_url] = filename
+        
+        filename = f"{date}_{category}_{seller}_{total}_{currency}"      
+        result[file_url] = filename
     
-    return dict(result)
+    return result
 
 
 async def get_summary_invoices(user_id: str, title: str, invoices: List[Dict], used_ai: bool = False) -> Dict:
@@ -61,7 +59,8 @@ async def get_summary_invoices(user_id: str, title: str, invoices: List[Dict], u
         summary_content = await generate_summary(serialize_json)
     else:
         # render_summary 是同步的，但很快，不需要异步
-        summary_content = render_summary(serialize_json)
+        summary_content = render_summary_html(serialize_json)
+        #summary_content = render_summary(serialize_json)
     
     logger.info("Summary generated successfully")
 
