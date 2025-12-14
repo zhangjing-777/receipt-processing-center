@@ -3,6 +3,7 @@ from typing import List, Dict
 from fastapi import APIRouter, HTTPException
 from core.quota import QuotaManager
 from summary_download.services import get_summary_invoices
+from summary_download.normalizing import render_summary, render_summary_html
 
 
 
@@ -43,11 +44,24 @@ async def receipt_summary_download_ai(user_id: str, title:str, invoices: List[Di
 @router.post("/summary-download")
 async def receipt_summary_download(user_id: str, title:str, invoices: List[Dict]):
     try:
-        result = await get_summary_invoices(user_id, title, invoices)
+        result = await get_summary_invoices(user_id, title, invoices, render_summary_html)
         
         return result
     
     except Exception as e:
         logger.info(f"Error in receipt_summary_download: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/summary-download-app")
+async def receipt_summary_download(user_id: str, title:str, invoices: List[Dict]):
+    try:
+        result = await get_summary_invoices(user_id, title, invoices, render_summary)
+        
+        return result
+    
+    except Exception as e:
+        logger.info(f"Error in receipt_summary_download: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 

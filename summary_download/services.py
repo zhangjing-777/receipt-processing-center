@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List
+from typing import Dict, List, Callable
 from sqlalchemy import insert
 from collections import defaultdict
 from core.generation import generate_summary
@@ -34,7 +34,7 @@ def group_invoices(invoices: List[Dict]) -> Dict:
     return result
 
 
-async def get_summary_invoices(user_id: str, title: str, invoices: List[Dict], used_ai: bool = False) -> Dict:
+async def get_summary_invoices(user_id: str, title: str, invoices: List[Dict], render_summary_fn: Callable, used_ai: bool = False) -> Dict:
     """
     完全异步的汇总发票处理
     
@@ -42,6 +42,7 @@ async def get_summary_invoices(user_id: str, title: str, invoices: List[Dict], u
         user_id: 用户 ID
         title: 报告标题
         invoices: 发票列表
+        render_summary_fn: render_summary or render_summary_html
         used_ai: 是否使用 AI 生成摘要
         
     Returns:
@@ -59,8 +60,7 @@ async def get_summary_invoices(user_id: str, title: str, invoices: List[Dict], u
         summary_content = await generate_summary(serialize_json)
     else:
         # render_summary 是同步的，但很快，不需要异步
-        summary_content = render_summary_html(serialize_json)
-        #summary_content = render_summary(serialize_json)
+        summary_content = render_summary_fn(serialize_json)
     
     logger.info("Summary generated successfully")
 

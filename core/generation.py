@@ -33,6 +33,12 @@ async def extract_fields_from_ocr(text):
     - category: string
     - address: string
 
+    ⚠️ Invoice date normalization (mandatory):
+    - For ambiguous numeric dates:
+        Infer the correct date interpretation using invoice language, address, currency, and vendor context.
+        • MM/DD/YYYY regions (e.g. United States): "01/09/2025" → "2025-01-09"
+        • DD/MM/YYYY regions (e.g. Spain, most of Europe): "01/09/2025" → "2025-09-01"
+
     Return only the JSON object, no extra explanation.
 
     Example output:
@@ -116,6 +122,13 @@ A subscription/recurring invoice usually includes:
 
 If it is a subscription invoice, **extract the following fields** and infer missing ones logically.
 
+---
+
+### Date normalization (mandatory):
+- For ambiguous numeric dates:
+    Infer the correct date interpretation using invoice language, address, currency, and vendor context.
+    • MM/DD/YYYY regions (e.g. United States): "01/09/2025" → "2025-01-09"
+    • DD/MM/YYYY regions (e.g. Spain, most of Europe): "01/09/2025" → "2025-09-01"
 ---
 
 ### Extraction Fields (output as JSON)
