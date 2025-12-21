@@ -71,7 +71,6 @@ async def upload_to_supabase(bucket, key, user_id):
         import asyncio
         successes = []
         failures = []
-        subscript = []
         
         # 创建所有处理任务
         tasks = [
@@ -90,8 +89,6 @@ async def upload_to_supabase(bucket, key, user_id):
                 failures.append(f"{filename} - {str(result)}")
             elif result["status"] == "success":
                 successes.append(result["filename"])
-                if result.get("is_subscription"):
-                    subscript.append(result["filename"])
             else:
                 failures.append(f"{result['filename']} - {result.get('error', 'Unknown error')}")
         
@@ -99,12 +96,10 @@ async def upload_to_supabase(bucket, key, user_id):
         total_files = len(successes) + len(failures)
         success_count = len(successes)
         failure_count = len(failures)
-        subscription_count = len(subscript)
         
         status = f"""You uploaded a total of {total_files} files: \n
                         {success_count} succeeded--{successes}, \n
-                        {failure_count} failed--{failures}, \n
-                        {subscription_count} subscriptions--{subscript}.
+                        {failure_count} failed--{failures}.
                         """
         
         logger.info(f"Processing summary - Total: {total_files}, Success: {success_count}, Failed: {failure_count}")
@@ -178,38 +173,16 @@ async def process_single_file(filename: str, public_url: str, user_id: str, raw_
             await session.commit()
             logger.info(f"Inserted receipt_items_en/ses_eml_info_en for {filename}")
 
-        # 异步订阅检测
-        is_subscription = False
-        try:
-            extracted = await analyze_and_extract_subscription(ocr)
-            extracted = clean_and_parse_json(extracted)
-            if extracted.get("is_subscription"):
-                is_subscription = True
-                sub_pre = SubscriptDataPreparer(extracted.get("subscription_fields"), user_id, "email")
-                subscript_row = await sub_pre.build_subscript_data()
-                encrypted_subscript_row = encrypt_data("subscription_records", subscript_row) 
-                async with AsyncSessionLocal() as session:
-                    await session.execute(
-                        insert(SubscriptionRecords).values(encrypted_subscript_row)
-                    )                           
-                    await session.commit()
-                logger.info(f"Successfully inserted subscription_records data for {filename}")
-                
-        except Exception as sub_error:
-            logger.warning(f"Subscription processing failed for {filename}: {sub_error}")
-
         logger.info(f"File {filename} processed successfully")
         
         return {
             "status": "success",
-            "filename": filename,
-            "is_subscription": is_subscription
+            "filename": filename
         }
         
     except Exception as e:
         logger.exception(f"Failed to process {filename}: {str(e)}")
         return {
             "status": "error",
-            "filename": filename,
-            "error": str(e)
+            "filename": filename
         }

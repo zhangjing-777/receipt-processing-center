@@ -14,9 +14,7 @@ fernet = Fernet(ENCRYPTION_KEY.encode() if isinstance(ENCRYPTION_KEY, str) else 
 SENSITIVE_FIELDS = {
     'receipt_items_en': ['buyer', 'seller', 'address', 'file_url','invoice_number','original_info','ocr'],
     'ses_eml_info_en': ['from_email', 'to_email', 's3_eml_url','buyer', 'seller'],
-    'receipt_summary_zip_en': ['summary_content','title','download_url'],
-    'subscription_records': ['seller_name', 'plan_name', 'note'],
-    'canonical_entities': ['canonical_buyer_name', 'canonical_seller_name', 'canonical_plan_name', 'notes']
+    'receipt_summary_zip_en': ['summary_content','title','download_url']
 }
 
 def encrypt_value(value):

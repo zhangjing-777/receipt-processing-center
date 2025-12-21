@@ -38,18 +38,15 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
         
         # 2. 并行处理 OCR 和字段提取
         logger.info("Starting parallel OCR and field extraction...")
-        successes, success_files, failures, subscription_files = await process_files_parallel(
+        successes, success_files, failures = await process_files_parallel(
             public_urls,
-            user_id,
             ocr_attachment,
             extract_fields_from_ocr,
-            analyze_and_extract_subscription,
             max_concurrent=5  # 根据 API 速率限制调整
         )
         
         # 3. 批量插入数据库
         receipt_records = []
-        subscription_records = []
         
         for result in successes:
             # 构建 receipt 数据
@@ -62,17 +59,6 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
             receipt_row = preparer.build_receipt_data()
             encrypted_receipt = encrypt_data("receipt_items_en", receipt_row)
             receipt_records.append(encrypted_receipt)
-            
-            # 处理订阅数据
-            if result.get("is_subscription") and result.get("subscription_fields"):
-                sub_preparer = SubscriptDataPreparer(
-                    result["subscription_fields"],
-                    user_id,
-                    "web"
-                )
-                sub_row = await sub_preparer.build_subscript_data()
-                encrypted_sub = encrypt_data("subscription_records", sub_row)
-                subscription_records.append(encrypted_sub)
         
         # 4. 批量插入（使用优化的批量操作）
         batch_ops = BatchOperations()
@@ -82,23 +68,16 @@ async def upload_to_supabase(user_id: str, files: List[UploadFile]):
                 await batch_ops.batch_insert(ReceiptItemsEN, receipt_records)
             logger.info(f"Batch inserted {len(receipt_records)} receipt records")
         
-        if subscription_records:
-            async with measure_time("batch_insert_subscriptions"):
-                await batch_ops.batch_insert(SubscriptionRecords, subscription_records)
-            logger.info(f"Batch inserted {len(subscription_records)} subscription records")
-        
         # 5. 生成状态报告
         total_files = len(public_urls)
         success_count = len(success_files)
         failure_count = len(failures)
-        subscription_count = len(subscription_files)
         
         status = f"""You uploaded a total of {total_files} files:\n
                      {success_count} succeeded--{success_files}, \n
-                     {failure_count} failed--{failures}, \n
-                     {subscription_count} subscriptions--{subscription_files}."""
+                     {failure_count} failed--{failures}."""
         
-        logger.info(f"Processing complete: {success_count} success, {failure_count} failed, {subscription_count} subscriptions")
+        logger.info(f"Processing complete: {success_count} success, {failure_count} failed")
         
         # 保存上传结果
         async with AsyncSessionLocal() as session:

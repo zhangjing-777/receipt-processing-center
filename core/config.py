@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     openrouter_url: str
     openrouter_api_key: str
+    openrouter_site: str
+    openrouter_app_name: str
     model_free: str
     model: str
 
