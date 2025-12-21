@@ -2,7 +2,7 @@ import logging
 from typing import Dict, List, Callable
 from sqlalchemy import insert
 from collections import defaultdict
-from core.generation import generate_summary
+# from core.generation import generate_summary
 from core.encryption import encrypt_data
 from core.models import ReceiptSummaryZipEN
 from core.database import AsyncSessionLocal

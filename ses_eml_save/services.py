@@ -1,12 +1,12 @@
 import logging
 from sqlalchemy import insert
 from core.database import AsyncSessionLocal
-from core.models import ReceiptItemsEN, SesEmlInfoEN, SubscriptionRecords, ReceiptItemsENUploadResult
+from core.models import ReceiptItemsEN, SesEmlInfoEN, ReceiptItemsENUploadResult
 from core.encryption import encrypt_data
 from core.ocr import ocr_attachment
 from core.utils import clean_and_parse_json
-from core.generation import extract_fields_from_ocr, analyze_and_extract_subscription
-from ses_eml_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
+from core.generation import extract_fields_from_ocr
+from ses_eml_save.insert_data import ReceiptDataPreparer
 from ses_eml_save.eml_parser import load_s3, mail_parser
 from ses_eml_save.upload_attachment import upload_attachments_to_storage
 from ses_eml_save.upload_string_to_image import render_html_string_to_image_and_upload

@@ -5,13 +5,13 @@ from sqlalchemy import insert
 from core.encryption import encrypt_data
 from core.ocr import ocr_attachment
 from core.database import AsyncSessionLocal
-from core.models import ReceiptItemsEN, SubscriptionRecords, ReceiptItemsENUploadResult
-from core.generation import extract_fields_from_ocr, analyze_and_extract_subscription
+from core.models import ReceiptItemsEN, ReceiptItemsENUploadResult
+from core.generation import extract_fields_from_ocr
 from core.upload_files import smart_upload_files
 from core.process_files import process_files_parallel
 from core.batch_operations import BatchOperations
 from core.performance_monitor import timer, measure_time
-from rcpdro_web_save.insert_data import ReceiptDataPreparer, SubscriptDataPreparer
+from rcpdro_web_save.insert_data import ReceiptDataPreparer
 
 logger = logging.getLogger(__name__)
 

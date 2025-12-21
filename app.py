@@ -15,7 +15,6 @@ from table_processor.receipt_items_en.router import router as receipt_items_en_r
 from table_processor.receipt_summary_zip_en.router import router as receipt_summary_zip_en_routers
 from table_processor.ses_eml_info_en.router import router as ses_eml_info_en_routers
 from table_processor.receipt_items_en_upload_result.router import router as receipt_items_en_upload_result_routers
-from table_processor.subscription_records.router import router as subscription_records_routers
 
 # 创建 logs 目录
 os.makedirs('logs', exist_ok=True)
@@ -109,7 +108,6 @@ app.include_router(receipt_items_en_routers)
 app.include_router(receipt_summary_zip_en_routers)
 app.include_router(ses_eml_info_en_routers)
 app.include_router(receipt_items_en_upload_result_routers)
-app.include_router(subscription_records_routers)
 
 
 @app.get("/health")
