@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 MODEL = settings.model
 MODEL_FREE = settings.model_free
-OPENROUTER_URL = settings.supabase_url
+OPENROUTER_URL = settings.openrouter_url
 SUPABASE_BUCKET = settings.supabase_bucket
-supabase: Client = create_client(OPENROUTER_URL, settings.supabase_service_role_key)
+supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
 HEADERS = {
     "Authorization": f"Bearer {settings.openrouter_api_key}",
