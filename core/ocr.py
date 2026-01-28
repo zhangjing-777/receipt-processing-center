@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 MODEL = settings.model
-MODEL_FREE = settings.model_free
+MODEL_FREE = settings.model
 OPENROUTER_URL = settings.openrouter_url
 SUPABASE_BUCKET = settings.supabase_bucket
 supabase: Client = create_client(settings.supabase_url, settings.supabase_service_role_key)
