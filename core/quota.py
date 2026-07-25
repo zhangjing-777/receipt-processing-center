@@ -22,7 +22,7 @@ class QuotaManager:
             else ReceiptUsageQuotaRequestEN
         )
 
-    async def check_and_reset(self):
+    async def check_and_reset(self, files_length: int):
         """
         异步检查并重置配额
         
@@ -69,10 +69,22 @@ class QuotaManager:
 
             self.month_limit = quota_data.month_limit 
             self.raw_limit = quota_data.raw_limit
-            allowed = self.used_month < (self.month_limit+self.raw_limit)
+            db_allowed = self.used_month < (self.month_limit+self.raw_limit)
 
-            if not allowed:
+            if not db_allowed:
                 remark = "⚠️ You have reached your month usage limit. Please try next period or upgrade your plan for more quota."
+                await session.execute(
+                    update(self.model)
+                    .where(self.model.user_id == self.user_id)
+                    .values(remark=remark)
+                )
+                await session.commit()
+                raise ValueError(remark)
+
+            use_allowed = self.used_month < files_length
+
+            if use_allowed:
+                remark = f"⚠️The number of files awaiting processing exceeds your available quota. You can currently process up to {self.used_month} invoices. Please re-upload no more than {self.used_month} invoices."
                 await session.execute(
                     update(self.model)
                     .where(self.model.user_id == self.user_id)

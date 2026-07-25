@@ -16,7 +16,8 @@ async def receiptdrop_transfer(user_id: str, files: List[UploadFile]):
     try:
         logger.info("Starting check and reset quato ...")
         quato_manager = QuotaManager(user_id, table="receipt_usage_quota_receipt_en")
-        await quato_manager.check_and_reset()
+        files_length = len(files)
+        await quato_manager.check_and_reset(files_length)
         logger.info("Check and reset quato successfully")
 
         status, success_count = await upload_to_supabase(user_id, files)
@@ -28,7 +29,7 @@ async def receiptdrop_transfer(user_id: str, files: List[UploadFile]):
         
         await send_push({
             "user_id": user_id,
-            "notification_type": "single_success" if len(files)==1 else "batch_success"
+            "notification_type": "single_success" if files_length==1 else "batch_success"
         })
         return status
     

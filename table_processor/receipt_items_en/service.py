@@ -32,7 +32,7 @@ class ReceiptItemsENService:
         offset: int = 0
     ) -> Dict:
         """
-        根据条件查询收据信息
+        根据条件查询收据信息(time为发票时间)
         
         Args:
             user_id: 用户 ID
@@ -128,7 +128,117 @@ class ReceiptItemsENService:
 
         logger.info(f"Query completed: {len(decrypted_result)} records")
         return decrypted_result
-    
+
+    @staticmethod
+    async def get_receipts_creat(
+        user_id: str,
+        ind: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+        limit: int = 0,
+        offset: int = 0
+    ) -> Dict:
+        """
+        根据条件查询收据信息(time为入库时间)
+        
+        Args:
+            user_id: 用户 ID
+            ind: 精确查询
+            start_time: 开始时间
+            end_time: 结束时间
+            year: 年份
+            month: 月份
+            limit: 分页大小
+            offset: 分页偏移
+            
+        Returns:
+            查询结果
+        """
+        logger.info(
+            f"Querying receipts for user_id: {user_id}, "
+            f"ind: {ind}, year: {year}, month: {month}"
+        )
+
+        async with measure_time("database_query"):
+            async with AsyncSessionLocal() as session:
+                # 构建查询
+                query = select(
+                    ReceiptItemsEN.ind,
+                    ReceiptItemsEN.id,
+                    ReceiptItemsEN.user_id,
+                    ReceiptItemsEN.category,
+                    ReceiptItemsEN.buyer,
+                    ReceiptItemsEN.seller,
+                    ReceiptItemsEN.invoice_date,
+                    ReceiptItemsEN.invoice_total,
+                    ReceiptItemsEN.currency,
+                    ReceiptItemsEN.file_url,
+                    ReceiptItemsEN.address
+                ).where(ReceiptItemsEN.user_id == user_id)
+
+                # 精确查询
+                if ind:
+                    query = query.where(ReceiptItemsEN.ind == ind)
+                    logger.info(f"Exact query for ind: {ind}")
+
+                # 按年月查询
+                elif year and month:               
+                    start_dt = datetime(year, month, 1)
+                    _, last_day = calendar.monthrange(year, month)
+                    end_dt = datetime(year, month, last_day, 23, 59, 59, 999999)
+
+                    query = query.where(
+                        ReceiptItemsEN.create_time >= start_dt,
+                        ReceiptItemsEN.create_time <= end_dt
+                    )
+                    logger.info(f"Monthly query: {year}-{month:02d}")
+
+                # 时间范围查询
+                elif start_time != "string" and end_time != "string":                    
+                    start_dt = datetime.strptime(start_time, "%Y-%m-%d")
+                    end_dt = datetime.strptime(end_time, "%Y-%m-%d")
+                    end_dt = end_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    query = query.where(
+                        ReceiptItemsEN.create_time >= start_dt,
+                        ReceiptItemsEN.create_time <= end_dt
+                    )
+                    logger.info(f"Range query: {start_time} - {end_time}")
+
+                # 分页查询
+                elif offset and limit:               
+                    query = query.order_by(
+                        ReceiptItemsEN.create_time.desc()
+                    ).offset(offset).limit(limit)
+
+                # 默认查询上个月
+                else:
+                    today = datetime.utcnow()
+                    first_of_this_month = datetime(today.year, today.month, 1)
+                    last_month_end = first_of_this_month - timedelta(seconds=1)
+                    last_month_start = datetime(last_month_end.year, last_month_end.month, 1)
+                    query = query.where(
+                        ReceiptItemsEN.create_time >= last_month_start,
+                        ReceiptItemsEN.create_time <= last_month_end
+                    )
+                    logger.info(f"Default: last month ({last_month_start.date()} ~ {last_month_end.date()})")
+
+                result = await session.execute(query)
+                records = result.mappings().all()
+
+        if not records:
+            return {"message": "No records found", "data": [], "total": 0, "status": "success"}
+
+        # 并行解密和签名
+        async with measure_time("decrypt_and_sign"):
+            decrypted_result = await asyncio.gather(
+                *[process_record(r, "receipt_items_en", "file_url") for r in records]
+            )
+
+        logger.info(f"Query completed: {len(decrypted_result)} records")
+        return decrypted_result
+
     @staticmethod
     async def update_receipt(
         ind: int,

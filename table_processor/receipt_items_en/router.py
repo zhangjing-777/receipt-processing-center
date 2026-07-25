@@ -73,6 +73,34 @@ async def get_receipt(request: GetReceiptRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+@router.post("/get-receipt-items-creat")
+@timer("get_receipt_items_creat")
+async def get_receipt_creat(request: GetReceiptRequest):
+    """
+    根据 user_id 和条件查询收据信息:
+    1. ind 精确查询
+    2. year + month 按月查询 creat_date
+    3. create_time 时间范围 (YYYY-MM-DD → timestamptz 范围)
+    4. limit+offset 分页查询
+    默认查询“上个月creat_date”的所有记录
+    """
+    try:
+        result = await ReceiptItemsENService.get_receipts_creat(
+            user_id=request.user_id,
+            ind=request.ind,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            year=request.year,
+            month=request.month,
+            limit=request.limit,
+            offset=request.offset
+        )
+        return result
+    except Exception as e:
+        logger.exception(f"Failed to retrieve receipts: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 # ========== 更新接口 ==========
 
 @router.post("/update-receipt-items")
