@@ -123,6 +123,8 @@ class ReceiptUsageQuotaReceiptEN(Base):
     email = Column(Text)
     email_hash = Column(Text)
     remark = Column(Text)
+    annual_limit = Column(Integer, default=0)   # 年度包当年额度上限
+    used_annual = Column(Integer, default=0)    # 年度包当年已用
 
 class ReceiptUsageQuotaRequestEN(Base):
     __tablename__ = "receipt_usage_quota_request_en"
@@ -136,3 +138,5 @@ class ReceiptUsageQuotaRequestEN(Base):
     email = Column(Text)
     email_hash = Column(Text)
     remark = Column(Text)
+    annual_limit = Column(Integer, default=0)
+    used_annual = Column(Integer, default=0)
